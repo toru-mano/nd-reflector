@@ -48,18 +48,31 @@ int main(int argc, char *argv[]) {
   lookup_addrs(if_name);
   fd = open_bpf(if_name);
   debug("bpd fd: %d", fd);
-  close(fd);
   exit(0);
 }
 
 static struct bpf_insn insns[] = {
-    BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 12),
-    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ETHERTYPE_REVARP, 0, 3),
-    BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 20),
-    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ARPOP_REVREQUEST, 0, 1),
-    BPF_STMT(BPF_RET | BPF_K,
-             sizeof(struct ether_arp) + sizeof(struct ether_header)),
-    BPF_STMT(BPF_RET | BPF_K, 0),
+    /* Make sure this is an IPv6 packet. */
+    BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
+    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IPV6, 0, 9),
+
+    /* Make sure this is an ICMPv6 packet. */
+    BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 20),
+    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_ICMPV6, 0, 7),
+
+    /* Make sure this is an Neighbor Discovery packet. */
+    BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 54),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_ROUTER_SOLICIT, 4, 0),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_ROUTER_ADVERT, 3, 0),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_NEIGHBOR_SOLICIT, 2, 0),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_NEIGHBOR_ADVERT, 1, 0),
+    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_REDIRECT, 0, 1),
+
+    /* If we passed all the tests, ask for the whole packet. */
+    BPF_STMT(BPF_RET + BPF_K, (u_int)-1),
+
+    /* Otherwise, drop it. */
+    BPF_STMT(BPF_RET + BPF_K, 0),
 };
 
 static struct bpf_program filter = {sizeof insns / sizeof(insns[0]), insns};
@@ -107,7 +120,7 @@ int open_bpf(char *if_name) {
 
   /* Set filter program. */
   if (ioctl(fd, BIOCSETF, (caddr_t)&filter) == -1)
-    err(1, "ioctl(BIOSETF)");
+    err(1, "ioctl(BIOCSETF)");
 
   /* Set direction filter to ignore outgoing packets. */
   flag = BPF_DIRECTION_OUT;
