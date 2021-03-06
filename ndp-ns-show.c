@@ -29,27 +29,28 @@
 #include <unistd.h>
 
 struct if_info {
-  int ii_fd;                       /* BPF file descriptor */
-  char ii_name[IFNAMSIZ];          /* if name, e.g. "en0" */
-  u_char ii_eaddr[ETHER_ADDR_LEN]; /* Ethernet address of this iface */
+  int bpf_fd;                      /* BPF file descriptor */
+  char if_name[IFNAMSIZ];          /* if name, e.g. "en0" */
+  u_char eth_addr[ETHER_ADDR_LEN]; /* Ethernet address of this iface */
   u_char *buf;                     // bpf read buffer
   size_t buf_max;                  // Allocated buffer size
 } ii;
 
 void lookup_addrs(char *);
 int open_bpf(char *);
+void ndp_show_loop(void);
 void error(const char *, ...);
 void errorx(const char *, ...);
 void debug(const char *, ...);
 
+
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
-  int fd;
   char if_name[] = "hvn2";
-  lookup_addrs(if_name);
-  fd = open_bpf(if_name);
-  debug("bpd fd: %d", fd);
+  //lookup_addrs(if_name);
+  ii.bpf_fd = open_bpf(if_name);
+  ndp_show_loop();
   exit(0);
 }
 
@@ -97,6 +98,12 @@ int open_bpf(char *if_name) {
   if (ioctl(fd, BIOCIMMEDIATE, &immediate) == -1)
     error("ioctl(BIOCIMMEDIATE)");
 
+  /* Associate a hardware interface to BPF descriptor. */
+  strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
+  if (ioctl(fd, BIOCSETIF, (caddr_t)&ifr) == -1)
+    error("ioctl(BIOCSETIF)");
+  debug("Attach BPF descriptor to %s", if_name);
+
   /* Get the BPF buffer length. */
   if (ioctl(fd, BIOCGBLEN, &sz) == -1)
     error("ioctl(BIOCGBLEN)");
@@ -105,12 +112,9 @@ int open_bpf(char *if_name) {
   ii.buf_max = sz;
   ii.buf = malloc(ii.buf_max);
   if (!ii.buf)
-    errorx("malloc for BFP buffer %zd byte", ii.buf_max);
+    errorx("malloc for BFP buffer %zu byte", ii.buf_max);
+  debug("Allocate %zu Bytes buffer for BPF descriptor .", ii.buf_max);
 
-  /* Associate a hardware interface to BPF descriptor. */
-  strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
-  if (ioctl(fd, BIOCSETIF, (caddr_t)&ifr) == -1)
-    error("ioctl(BIOCSETIF)");
 
   /*
    * Check that the data link layer is an Ethernet; this code won't work with
@@ -148,7 +152,7 @@ void lookup_addrs(char *if_name) {
   struct sockaddr_dl *sdl;
   struct sockaddr_in *sin;
   struct sockaddr_in6 *sin6;
-  u_char *eaddr = ii.ii_eaddr;
+  u_char *eaddr = ii.eth_addr;
   int found = 0;
   char ntop_buf[INET6_ADDRSTRLEN];
 
@@ -193,13 +197,115 @@ void lookup_addrs(char *if_name) {
     errorx("Interface not found %s\n", if_name);
 }
 
-void ndp_show_loop(void) {}
+static int ndp_check(u_char *p, size_t len) {
+  struct ether_header *ether = (struct ether_header *) p;
+  struct ip6_hdr *ip6 = (struct ip6_hdr *) (p + sizeof(*ether));
+  struct icmp6_hdr *icmp6 = (struct icmp6_hdr *) (p + sizeof(*ether) + sizeof(*ip6));
+
+  debug("Receive a packet with captured length %zu", len);
+
+  if (len < sizeof(*ether) + sizeof(*ip6) + sizeof(*icmp6)) {
+    debug("Truncated packet");
+    return 0;
+  }
+
+  if (ntohs(ether->ether_type) != ETHERTYPE_IPV6
+      || ip6->ip6_nxt != IPPROTO_ICMPV6
+      || (133 <= icmp6->icmp6_code && icmp6->icmp6_code <= 136)
+      ) {
+    debug("Failed sanity check.");
+    return 0;
+  }
+
+  return 1;
+}
+
+void ndp_process(u_char *p) {
+  char ntop_buf[INET6_ADDRSTRLEN];
+  struct ether_header *ether = (struct ether_header *) p;
+  struct ip6_hdr *ip6 = (struct ip6_hdr *) (p + sizeof(*ether));
+  struct icmp6_hdr *icmp6 = (struct icmp6_hdr *) (p + sizeof(*ether) + sizeof(*ip6));
+  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *) (p + sizeof(*ether) + sizeof(*ip6));
+  u_char *eth_addr;
+
+  eth_addr = ether->ether_dhost;
+  debug("[Dst MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1], eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
+
+  eth_addr = ether->ether_shost;
+  debug("[Src MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1], eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
+
+  inet_ntop(AF_INET6, &ip6->ip6_src, ntop_buf, sizeof(ntop_buf));
+  debug("[Src IPv6]: %s", ntop_buf);
+
+  inet_ntop(AF_INET6, &ip6->ip6_dst, ntop_buf, sizeof(ntop_buf));
+  debug("[Dst IPv6]: %s", ntop_buf);
+
+  debug("[ICMPv6]: type: %u, code: %u", icmp6->icmp6_type, icmp6->icmp6_code);
+
+  if(icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT) {
+    inet_ntop(AF_INET6, &nd_ns->nd_ns_target, ntop_buf, sizeof(ntop_buf));
+    debug("[ND_NS]: target: %s", ntop_buf);
+
+  }
+}
+
+void ndp_show_loop(void) {
+  struct pollfd pfd;
+  int ndfs, timeout = INFTIM;
+  ssize_t length;
+  u_char *buf, *buf_limit;
+  struct bpf_hdr bh;
+
+  pfd.fd = ii.bpf_fd;
+  pfd.events = POLLIN;
+
+  while (1) {
+
+    ndfs = poll(&pfd, 1, -1);
+    if (ndfs == -1) {
+      if (errno == EINTR)
+        continue;
+      error("poll");
+    }
+    if (ndfs == 0) {
+      debug("poll returns zero.");
+      continue;
+    }
+
+  again:
+    length = read(pfd.fd, (char *)ii.buf, ii.buf_max);
+
+    /* Don't choke when we get ptraced */
+    if (length == -1 && errno == EINTR) {
+      debug("EINTR while read.");
+      goto again;
+    }
+    if (length == -1)
+      error("read");
+
+    buf = ii.buf;
+    buf_limit = ii.buf + length;
+
+    while (buf < buf_limit) {
+      bh = *(struct bpf_hdr*)buf;
+      /* memcpy(&bh, buf, sizeof(bh)); */
+
+      debug("BPF header length: %u, captured length: %lu", bh.bh_hdrlen, bh.bh_caplen);
+
+      if (ndp_check(buf + bh.bh_hdrlen, bh.bh_caplen))
+        ndp_process(buf + bh.bh_hdrlen);
+
+      buf += BPF_WORDALIGN(bh.bh_hdrlen + bh.bh_caplen);
+    }
+  }
+}
+
 
 __dead void error(const char *fmt, ...) {
   va_list ap;
 
   if (dflag) {
-    (void)fprintf(stderr, "rarpd: error: ");
+    (void)fprintf(stderr, "ndp-show: error: ");
     va_start(ap, fmt);
     (void)vfprintf(stderr, fmt, ap);
     va_end(ap);
@@ -212,7 +318,7 @@ __dead void errorx(const char *fmt, ...) {
   va_list ap;
 
   if (dflag) {
-    (void)fprintf(stderr, "rarpd: error: ");
+    (void)fprintf(stderr, "ndp-show: error: ");
     va_start(ap, fmt);
     (void)vfprintf(stderr, fmt, ap);
     va_end(ap);
