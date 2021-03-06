@@ -32,6 +32,8 @@ struct if_info {
   int ii_fd;                       /* BPF file descriptor */
   char ii_name[IFNAMSIZ];          /* if name, e.g. "en0" */
   u_char ii_eaddr[ETHER_ADDR_LEN]; /* Ethernet address of this iface */
+  u_char *buf; // bpf read buffer
+  size_t buf_max; // Allocated buffer size
 } ii;
 
 void lookup_addrs(char *);
@@ -66,22 +68,31 @@ static struct bpf_program filter = {sizeof insns / sizeof(insns[0]), insns};
  * Open a BPF file and attach it to the interface named 'if_name'.
  */
 int open_bpf(char *if_name) {
-  int fd, immediate;
+  int fd, immediate, sz, flag;
   struct ifreq ifr;
   u_int dlt;
 
   if ((fd = open("/dev/bpf", O_RDWR)) == -1)
     err(1, "open /dev/bpf:");
-  
-  debug("Open BPF file descriptor: %d", fd);
 
+  debug("Open BPF file descriptor: %d", fd);
 
   /* Set immediate mode so packets are processed as they arrive. */
   immediate = 1;
   if (ioctl(fd, BIOCIMMEDIATE, &immediate) == -1)
     err(1, "ioctl(BIOCIMMEDIATE)");
 
-  /* Associate a hardware interface to BPF fd */
+  /* Get the BPF buffer length. */
+  if (ioctl(fd, BIOCGBLEN, &sz) == -1)
+    err(1, "ioctl(BIOCGBLEN)");
+
+  /* Allocate buffer for BPF read */
+  ii.buf_max = sz;
+  ii.buf = malloc(ii.buf_max);
+  if(!ii.buf)
+    errx(1, "malloc for BFP buffer %zd byte", ii.buf_max);
+
+  /* Associate a hardware interface to BPF descriptor. */
   strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
   if (ioctl(fd, BIOCSETIF, (caddr_t)&ifr) == -1)
     err(1, "ioctl(BIOCSETIF)");
@@ -91,13 +102,21 @@ int open_bpf(char *if_name) {
    */
   if (ioctl(fd, BIOCGDLT, (caddr_t) &dlt) == -1)
     err(1, "ioctl(BIOCGDLT)");
-  if (dlt != DLT_EN10MB) {
-    errx(1, "%s is not an ethernet", if_name);
-  }
+  if (dlt != DLT_EN10MB)
+    errx(1, "%s is not an Ethernet interface.", if_name);
 
   /* Set filter program. */
   if (ioctl(fd, BIOCSETF, (caddr_t)&filter) == -1)
     err(1, "ioctl(BIOSETF)");
+
+  /* Set direction filter to ignore outgoing packets. */
+  flag = BPF_DIRECTION_OUT;
+  if (ioctl(fd, BIOCSDIRFILT , &flag) == -1)
+    err(1, "ioctl(BIOCSDIRFILT)");
+
+  /* Lock the BPF descriptor to prevent the security issues after dropping privileges. */
+  if (ioctl(fd, BIOCLOCK) == -1)
+    err(1, "ioctl(BIOCLOCK)");
 
   return fd;
 }
@@ -134,7 +153,7 @@ void lookup_addrs(char *if_name) {
         memcpy((caddr_t)eaddr, (caddr_t)LLADDR(sdl), ETHER_ADDR_LEN);
         debug("%s [Ethernet]: %02x:%02x:%02x:%02x:%02x:%02x",
               ifa->ifa_name, eaddr[0], eaddr[1], eaddr[2], eaddr[3],
-              eaddr[4], eaddr[5]);        
+              eaddr[4], eaddr[5]);
         found = 1;
       }
       break;
