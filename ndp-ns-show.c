@@ -7,8 +7,6 @@
 #include <net/if_dl.h>
 #include <net/if_types.h>
 
-
-
 #include <netinet/in.h>
 
 #include <netinet/if_ether.h>
@@ -28,6 +26,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdarg.h>
 
 struct if_info {
   int ii_fd;                       /* BPF file descriptor */
@@ -37,15 +36,17 @@ struct if_info {
 
 void lookup_addrs(char *);
 int open_bpf(char *);
+void debug(const char *,...);
 
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
   int fd;
-  char if_name[] = "hvn1";
+  char if_name[] = "hvn2";
   lookup_addrs(if_name);
   fd = open_bpf(if_name);
-  printf("bpd fd: %d\n", fd);
+  debug("bpd fd: %d", fd);
+  close(fd);
   exit(0);
 }
 
@@ -71,14 +72,17 @@ int open_bpf(char *if_name) {
 
   if ((fd = open("/dev/bpf", O_RDWR)) == -1)
     err(1, "open /dev/bpf:");
+  
+  debug("Open BPF file descriptor: %d", fd);
+
 
   /* Set immediate mode so packets are processed as they arrive. */
   immediate = 1;
   if (ioctl(fd, BIOCIMMEDIATE, &immediate) == -1)
     err(1, "ioctl(BIOCIMMEDIATE)");
 
+  /* Associate a hardware interface to BPF fd */
   strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
-
   if (ioctl(fd, BIOCSETIF, (caddr_t)&ifr) == -1)
     err(1, "ioctl(BIOCSETIF)");
 
@@ -118,8 +122,7 @@ void lookup_addrs(char *if_name) {
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
     if (strcmp(ifa->ifa_name, if_name)) {
-      if (dflag)
-        printf("Skip interface %s\n", ifa->ifa_name);
+      debug("Skip interface %s", ifa->ifa_name);
       continue;
     }
 
@@ -129,27 +132,23 @@ void lookup_addrs(char *if_name) {
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
         memcpy((caddr_t)eaddr, (caddr_t)LLADDR(sdl), ETHER_ADDR_LEN);
-        if (dflag)
-          printf("%s [Ethernet]: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                 ifa->ifa_name, eaddr[0], eaddr[1], eaddr[2], eaddr[3],
-                 eaddr[4], eaddr[5]);
+        debug("%s [Ethernet]: %02x:%02x:%02x:%02x:%02x:%02x",
+              ifa->ifa_name, eaddr[0], eaddr[1], eaddr[2], eaddr[3],
+              eaddr[4], eaddr[5]);        
         found = 1;
       }
       break;
 
     case AF_INET:
       sin = (struct sockaddr_in *)ifa->ifa_addr;
-      if (dflag)
-        printf("%s [IPv4]: %s\n", ifa->ifa_name, inet_ntoa(sin->sin_addr));
+      debug("%s [IPv4]: %s\n", ifa->ifa_name, inet_ntoa(sin->sin_addr));
       break;
 
     case AF_INET6:
       sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
-      if (dflag) {
-        if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
-          err(1, "inet_ntop");
-        printf("%s [IPv6]: %s\n", ifa->ifa_name, ntop_buf);
-      }
+      if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
+        err(1, "inet_ntop");
+      debug("%s [IPv6]: %s", ifa->ifa_name, ntop_buf);
       break;
     }
   }
@@ -158,3 +157,18 @@ void lookup_addrs(char *if_name) {
   if (!found)
     errx(1, "Interface not found %s\n", if_name);
 }
+
+void
+debug(const char *fmt,...)
+{
+	va_list ap;
+
+	if (dflag) {
+		va_start(ap, fmt);
+		(void) fprintf(stderr, "ndp-show: ");
+		(void) vfprintf(stderr, fmt, ap);
+		va_end(ap);
+		(void) fprintf(stderr, "\n");
+	}
+}
+
