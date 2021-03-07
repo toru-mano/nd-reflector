@@ -165,7 +165,7 @@ void lookup_addrs(char *if_name) {
     case AF_LINK:
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
-        memcpy((caddr_t)eaddr, (caddr_t)LLADDR(sdl), ETHER_ADDR_LEN);
+        eaddr = (caddr_t)LLADDR(sdl);
         debug("%s [Ethernet]: %02x:%02x:%02x:%02x:%02x:%02x", ifa->ifa_name,
               eaddr[0], eaddr[1], eaddr[2], eaddr[3], eaddr[4], eaddr[5]);
         found = 1;
@@ -193,10 +193,9 @@ void lookup_addrs(char *if_name) {
 
 static int ndp_check(u_char *p, size_t len) {
   struct ether_header *ether = (struct ether_header *)p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)((char*)ether + sizeof(*ether));
-  struct nd_neighbor_solicit *nd_ns =
-    (struct nd_neighbor_solicit *)((char*)ip6 + sizeof(*ip6));
-  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)((char*)nd_ns + sizeof(*nd_ns));
+  struct ip6_hdr *ip6 = (struct ip6_hdr *)(ether + 1);
+  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *)(ip6 + 1);
+  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)(nd_ns + 1);
 
   debug("Receive a packet with captured length %zu", len);
 
@@ -211,7 +210,8 @@ static int ndp_check(u_char *p, size_t len) {
   }
 
   if (len != sizeof(*ether) + sizeof(*ip6) + ntohs(ip6->ip6_plen)) {
-    debug("IPv6 payload length %u missmatches captured length.", ntohs(ip6->ip6_plen));
+    debug("IPv6 payload length %u missmatches captured length.",
+          ntohs(ip6->ip6_plen));
     return 0;
   }
 
@@ -228,21 +228,24 @@ static int ndp_check(u_char *p, size_t len) {
   // ND_NS has at most one ND option.
   if (len == sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns)) {
     return 1;
-  } else if (len == sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns) + 8 * nd_opt->nd_opt_len) {
-    return nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR && nd_opt->nd_opt_len == 1;
-    debug("Unsupported ND opton, type: %u, len %u", nd_opt->nd_opt_type, nd_opt->nd_opt_len);
+  } else if (len == sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns) +
+                        8 * nd_opt->nd_opt_len) {
+    return nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR &&
+           nd_opt->nd_opt_len == 1;
+    debug("Unsupported ND opton, type: %u, len %u", nd_opt->nd_opt_type,
+          nd_opt->nd_opt_len);
   }
 
-  debug("More than one ND optoin.");
+  debug("More than one ND optoins.");
   return 0;
 }
 
 void ndp_process(u_char *p) {
   char ntop_buf[INET6_ADDRSTRLEN];
   struct ether_header *ether = (struct ether_header *)p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)((char*)ether + sizeof(*ether));
-  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *)((char*)ip6 + sizeof(*ip6));
-  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)((char*)nd_ns + sizeof(*nd_ns));
+  struct ip6_hdr *ip6 = (struct ip6_hdr *)(ether + 1);
+  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *)(ip6 + 1);
+  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)(nd_ns + 1);
   u_char *eth_addr;
 
   eth_addr = ether->ether_dhost;
@@ -266,8 +269,9 @@ void ndp_process(u_char *p) {
 
   // ND_NS may have a ND optoin
   if (ip6->ip6_plen > sizeof(*nd_ns)) {
-    debug("[ND_OPT]: type: %d, len: %d", nd_opt->nd_opt_type, nd_opt->nd_opt_len);
-    eth_addr = (char *)nd_opt + sizeof(*nd_opt);
+    debug("[ND_OPT]: type: %d, len: %d", nd_opt->nd_opt_type,
+          nd_opt->nd_opt_len);
+    eth_addr = (char *)(nd_opt + 1);
     debug("[ND_MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1],
           eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
   }
@@ -278,7 +282,7 @@ void ndp_show_loop(void) {
   int ndfs, timeout = INFTIM;
   ssize_t length;
   u_char *buf, *buf_limit;
-  struct bpf_hdr bh;
+  struct bpf_hdr *bh;
 
   pfd.fd = ii.bpf_fd;
   pfd.events = POLLIN;
@@ -311,16 +315,15 @@ void ndp_show_loop(void) {
     buf_limit = ii.buf + length;
 
     while (buf < buf_limit) {
-      bh = *(struct bpf_hdr *)buf;
-      /* memcpy(&bh, buf, sizeof(bh)); */
+      bh = (struct bpf_hdr *)buf;
 
-      debug("BPF header length: %u, captured length: %lu", bh.bh_hdrlen,
-            bh.bh_caplen);
+      debug("BPF header length: %u, captured length: %lu", bh->bh_hdrlen,
+            bh->bh_caplen);
 
-      if (ndp_check(buf + bh.bh_hdrlen, bh.bh_caplen))
-        ndp_process(buf + bh.bh_hdrlen);
+      if (ndp_check(buf + bh->bh_hdrlen, bh->bh_caplen))
+        ndp_process(buf + bh->bh_hdrlen);
 
-      buf += BPF_WORDALIGN(bh.bh_hdrlen + bh.bh_caplen);
+      buf += BPF_WORDALIGN(bh->bh_hdrlen + bh->bh_caplen);
     }
   }
 }
