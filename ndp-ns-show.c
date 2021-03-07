@@ -193,9 +193,10 @@ void lookup_addrs(char *if_name) {
 
 static int ndp_check(u_char *p, size_t len) {
   struct ether_header *ether = (struct ether_header *)p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)(p + sizeof(*ether));
+  struct ip6_hdr *ip6 = (struct ip6_hdr *)((char*)ether + sizeof(*ether));
   struct nd_neighbor_solicit *nd_ns =
-      (struct nd_neighbor_solicit *)(p + sizeof(*ether) + sizeof(*ip6));
+    (struct nd_neighbor_solicit *)((char*)ip6 + sizeof(*ip6));
+  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)((char*)nd_ns + sizeof(*nd_ns));
 
   debug("Receive a packet with captured length %zu", len);
 
@@ -209,6 +210,11 @@ static int ndp_check(u_char *p, size_t len) {
     return 0;
   }
 
+  if (len != sizeof(*ether) + sizeof(*ip6) + ntohs(ip6->ip6_plen)) {
+    debug("IPv6 payload length %u missmatches captured length.", ntohs(ip6->ip6_plen));
+    return 0;
+  }
+
   if (ip6->ip6_nxt != IPPROTO_ICMPV6) {
     debug("Not an ICMPv6 packet.");
     return 0;
@@ -219,15 +225,24 @@ static int ndp_check(u_char *p, size_t len) {
     return 0;
   }
 
-  return 1;
+  // ND_NS has at most one ND option.
+  if (len == sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns)) {
+    return 1;
+  } else if (len == sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns) + 8 * nd_opt->nd_opt_len) {
+    return nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR && nd_opt->nd_opt_len == 1;
+    debug("Unsupported ND opton, type: %u, len %u", nd_opt->nd_opt_type, nd_opt->nd_opt_len);
+  }
+
+  debug("More than one ND optoin.");
+  return 0;
 }
 
 void ndp_process(u_char *p) {
   char ntop_buf[INET6_ADDRSTRLEN];
   struct ether_header *ether = (struct ether_header *)p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)(p + sizeof(*ether));
-  struct nd_neighbor_solicit *nd_ns =
-      (struct nd_neighbor_solicit *)(p + sizeof(*ether) + sizeof(*ip6));
+  struct ip6_hdr *ip6 = (struct ip6_hdr *)((char*)ether + sizeof(*ether));
+  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *)((char*)ip6 + sizeof(*ip6));
+  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)((char*)nd_ns + sizeof(*nd_ns));
   u_char *eth_addr;
 
   eth_addr = ether->ether_dhost;
@@ -248,6 +263,14 @@ void ndp_process(u_char *p) {
 
   inet_ntop(AF_INET6, &nd_ns->nd_ns_target, ntop_buf, sizeof(ntop_buf));
   debug("[ND_NS]: target: %s", ntop_buf);
+
+  // ND_NS may have a ND optoin
+  if (ip6->ip6_plen > sizeof(*nd_ns)) {
+    debug("[ND_OPT]: type: %d, len: %d", nd_opt->nd_opt_type, nd_opt->nd_opt_len);
+    eth_addr = (char *)nd_opt + sizeof(*nd_opt);
+    debug("[ND_MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1],
+          eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
+  }
 }
 
 void ndp_show_loop(void) {
