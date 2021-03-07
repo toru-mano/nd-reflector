@@ -43,12 +43,11 @@ void error(const char *, ...);
 void errorx(const char *, ...);
 void debug(const char *, ...);
 
-
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
   char if_name[] = "hvn2";
-  //lookup_addrs(if_name);
+  // lookup_addrs(if_name);
   ii.bpf_fd = open_bpf(if_name);
   ndp_show_loop();
   exit(0);
@@ -57,19 +56,15 @@ int main(int argc, char *argv[]) {
 static struct bpf_insn insns[] = {
     /* Make sure this is an IPv6 packet. */
     BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IPV6, 0, 9),
+    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IPV6, 0, 5),
 
     /* Make sure this is an ICMPv6 packet. */
     BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 20),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_ICMPV6, 0, 7),
+    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_ICMPV6, 0, 3),
 
-    /* Make sure this is an Neighbor Discovery packet. */
+    /* Make sure this is an Neighbor Solicit packet. */
     BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 54),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_ROUTER_SOLICIT, 4, 0),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_ROUTER_ADVERT, 3, 0),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_NEIGHBOR_SOLICIT, 2, 0),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_NEIGHBOR_ADVERT, 1, 0),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_REDIRECT, 0, 1),
+    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ND_NEIGHBOR_SOLICIT, 0, 1),
 
     /* If we passed all the tests, ask for the whole packet. */
     BPF_STMT(BPF_RET + BPF_K, (u_int)-1),
@@ -114,7 +109,6 @@ int open_bpf(char *if_name) {
   if (!ii.buf)
     errorx("malloc for BFP buffer %zu byte", ii.buf_max);
   debug("Allocate %zu Bytes buffer for BPF descriptor .", ii.buf_max);
-
 
   /*
    * Check that the data link layer is an Ethernet; this code won't work with
@@ -198,22 +192,30 @@ void lookup_addrs(char *if_name) {
 }
 
 static int ndp_check(u_char *p, size_t len) {
-  struct ether_header *ether = (struct ether_header *) p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *) (p + sizeof(*ether));
-  struct icmp6_hdr *icmp6 = (struct icmp6_hdr *) (p + sizeof(*ether) + sizeof(*ip6));
+  struct ether_header *ether = (struct ether_header *)p;
+  struct ip6_hdr *ip6 = (struct ip6_hdr *)(p + sizeof(*ether));
+  struct nd_neighbor_solicit *nd_ns =
+      (struct nd_neighbor_solicit *)(p + sizeof(*ether) + sizeof(*ip6));
 
   debug("Receive a packet with captured length %zu", len);
 
-  if (len < sizeof(*ether) + sizeof(*ip6) + sizeof(*icmp6)) {
+  if (len < sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns)) {
     debug("Truncated packet");
     return 0;
   }
 
-  if (ntohs(ether->ether_type) != ETHERTYPE_IPV6
-      || ip6->ip6_nxt != IPPROTO_ICMPV6
-      || (133 <= icmp6->icmp6_code && icmp6->icmp6_code <= 136)
-      ) {
-    debug("Failed sanity check.");
+  if (ntohs(ether->ether_type) != ETHERTYPE_IPV6) {
+    debug("Not an IPv6 packet.");
+    return 0;
+  }
+
+  if (ip6->ip6_nxt != IPPROTO_ICMPV6) {
+    debug("Not an ICMPv6 packet.");
+    return 0;
+  }
+
+  if (nd_ns->nd_ns_type != ND_NEIGHBOR_SOLICIT) {
+    debug("Not a ND_NS packet.");
     return 0;
   }
 
@@ -222,17 +224,19 @@ static int ndp_check(u_char *p, size_t len) {
 
 void ndp_process(u_char *p) {
   char ntop_buf[INET6_ADDRSTRLEN];
-  struct ether_header *ether = (struct ether_header *) p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *) (p + sizeof(*ether));
-  struct icmp6_hdr *icmp6 = (struct icmp6_hdr *) (p + sizeof(*ether) + sizeof(*ip6));
-  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *) (p + sizeof(*ether) + sizeof(*ip6));
+  struct ether_header *ether = (struct ether_header *)p;
+  struct ip6_hdr *ip6 = (struct ip6_hdr *)(p + sizeof(*ether));
+  struct nd_neighbor_solicit *nd_ns =
+      (struct nd_neighbor_solicit *)(p + sizeof(*ether) + sizeof(*ip6));
   u_char *eth_addr;
 
   eth_addr = ether->ether_dhost;
-  debug("[Dst MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1], eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
+  debug("[Dst MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1],
+        eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
 
   eth_addr = ether->ether_shost;
-  debug("[Src MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1], eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
+  debug("[Src MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1],
+        eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
 
   inet_ntop(AF_INET6, &ip6->ip6_src, ntop_buf, sizeof(ntop_buf));
   debug("[Src IPv6]: %s", ntop_buf);
@@ -240,13 +244,10 @@ void ndp_process(u_char *p) {
   inet_ntop(AF_INET6, &ip6->ip6_dst, ntop_buf, sizeof(ntop_buf));
   debug("[Dst IPv6]: %s", ntop_buf);
 
-  debug("[ICMPv6]: type: %u, code: %u", icmp6->icmp6_type, icmp6->icmp6_code);
+  debug("[ICMPv6]: type: %u, code: %u", nd_ns->nd_ns_type, nd_ns->nd_ns_code);
 
-  if(icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT) {
-    inet_ntop(AF_INET6, &nd_ns->nd_ns_target, ntop_buf, sizeof(ntop_buf));
-    debug("[ND_NS]: target: %s", ntop_buf);
-
-  }
+  inet_ntop(AF_INET6, &nd_ns->nd_ns_target, ntop_buf, sizeof(ntop_buf));
+  debug("[ND_NS]: target: %s", ntop_buf);
 }
 
 void ndp_show_loop(void) {
@@ -287,10 +288,11 @@ void ndp_show_loop(void) {
     buf_limit = ii.buf + length;
 
     while (buf < buf_limit) {
-      bh = *(struct bpf_hdr*)buf;
+      bh = *(struct bpf_hdr *)buf;
       /* memcpy(&bh, buf, sizeof(bh)); */
 
-      debug("BPF header length: %u, captured length: %lu", bh.bh_hdrlen, bh.bh_caplen);
+      debug("BPF header length: %u, captured length: %lu", bh.bh_hdrlen,
+            bh.bh_caplen);
 
       if (ndp_check(buf + bh.bh_hdrlen, bh.bh_caplen))
         ndp_process(buf + bh.bh_hdrlen);
@@ -299,7 +301,6 @@ void ndp_show_loop(void) {
     }
   }
 }
-
 
 __dead void error(const char *fmt, ...) {
   va_list ap;
