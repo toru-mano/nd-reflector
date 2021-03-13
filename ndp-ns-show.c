@@ -47,7 +47,7 @@ int dflag = 1;
 
 int main(int argc, char *argv[]) {
   char if_name[] = "hvn2";
-  // lookup_addrs(if_name);
+  lookup_addrs(if_name);
   ii.bpf_fd = open_bpf(if_name);
   ndp_show_loop();
   exit(0);
@@ -108,7 +108,7 @@ int open_bpf(char *if_name) {
   ii.buf = malloc(ii.buf_max);
   if (!ii.buf)
     errorx("malloc for BFP buffer %zu byte", ii.buf_max);
-  debug("Allocate %zu Bytes buffer for BPF descriptor .", ii.buf_max);
+  debug("Allocate %zu Bytes buffer for BPF descriptor.", ii.buf_max);
 
   /*
    * Check that the data link layer is an Ethernet; this code won't work with
@@ -166,8 +166,7 @@ void lookup_addrs(char *if_name) {
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
         eaddr = (caddr_t)LLADDR(sdl);
-        debug("%s [Ethernet]: %02x:%02x:%02x:%02x:%02x:%02x", ifa->ifa_name,
-              eaddr[0], eaddr[1], eaddr[2], eaddr[3], eaddr[4], eaddr[5]);
+        debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa((struct ether_addr*)eaddr));
         found = 1;
       }
       break;
@@ -246,15 +245,9 @@ void ndp_process(u_char *p) {
   struct ip6_hdr *ip6 = (struct ip6_hdr *)(ether + 1);
   struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *)(ip6 + 1);
   struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)(nd_ns + 1);
-  u_char *eth_addr;
 
-  eth_addr = ether->ether_dhost;
-  debug("[Dst MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1],
-        eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
-
-  eth_addr = ether->ether_shost;
-  debug("[Src MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1],
-        eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
+  debug("[Dst MAC]: %s", ether_ntoa((struct ether_addr *)ether->ether_dhost));
+  debug("[Src MAC]: %s", ether_ntoa((struct ether_addr *)ether->ether_shost));
 
   inet_ntop(AF_INET6, &ip6->ip6_src, ntop_buf, sizeof(ntop_buf));
   debug("[Src IPv6]: %s", ntop_buf);
@@ -271,9 +264,7 @@ void ndp_process(u_char *p) {
   if (ip6->ip6_plen > sizeof(*nd_ns)) {
     debug("[ND_OPT]: type: %d, len: %d", nd_opt->nd_opt_type,
           nd_opt->nd_opt_len);
-    eth_addr = (char *)(nd_opt + 1);
-    debug("[ND_MAC]: %02x:%02x:%02x:%02x:%02x:%02x", eth_addr[0], eth_addr[1],
-          eth_addr[2], eth_addr[3], eth_addr[4], eth_addr[5]);
+    debug("[ND_MAC]: %s", ether_ntoa((struct ether_addr *)(nd_opt + 1)));
   }
 }
 
