@@ -29,12 +29,27 @@
 #include <unistd.h>
 
 struct if_info {
-  int bpf_fd;                      /* BPF file descriptor */
-  char if_name[IFNAMSIZ];          /* if name, e.g. "en0" */
-  u_char eth_addr[ETHER_ADDR_LEN]; /* Ethernet address of this iface */
-  u_char *buf;                     // bpf read buffer
-  size_t buf_max;                  // Allocated buffer size
+  int bpf_fd;                 /* BPF file descriptor for ND_NS receipt */
+  int sock;                   /* Raw ICMPv6 socket for ND_NA sending */
+  char if_name[IFNAMSIZ];     /* if name, e.g. "en0" */
+  struct ether_addr eth_addr; /* Ethernet address of this iface */
+  u_char *buf;                /* bpf read buffer */
+  size_t buf_max;             /* Allocated buffer size */
 } ii;
+
+struct raw_nd_ns {
+  struct ether_header eth_hdr;
+  struct ip6_hdr ip6_hdr;
+  struct nd_neighbor_solicit ns_hdr;
+  struct nd_opt_hdr opt_hdr;
+  struct ether_addr opt_lladr;
+} __packed;
+
+struct nd_na {
+  struct nd_neighbor_advert na_hdr;
+  struct nd_opt_hdr opt_hdr;
+  struct ether_addr opt_lladr;
+} __packed;
 
 void lookup_addrs(char *);
 int open_bpf(char *);
@@ -46,7 +61,7 @@ void debug(const char *, ...);
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
-  char if_name[] = "hvn2";
+  char if_name[] = "hvn1";
   lookup_addrs(if_name);
   ii.bpf_fd = open_bpf(if_name);
   ndp_show_loop();
@@ -146,7 +161,7 @@ void lookup_addrs(char *if_name) {
   struct sockaddr_dl *sdl;
   struct sockaddr_in *sin;
   struct sockaddr_in6 *sin6;
-  u_char *eaddr = ii.eth_addr;
+
   int found = 0;
   char ntop_buf[INET6_ADDRSTRLEN];
 
@@ -165,8 +180,8 @@ void lookup_addrs(char *if_name) {
     case AF_LINK:
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
-        eaddr = (caddr_t)LLADDR(sdl);
-        debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa((struct ether_addr*)eaddr));
+        ii.eth_addr = *(struct ether_addr *)LLADDR(sdl);
+        debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa(&ii.eth_addr));
         found = 1;
       }
       break;
@@ -190,97 +205,130 @@ void lookup_addrs(char *if_name) {
     errorx("Interface not found %s\n", if_name);
 }
 
-static int ndp_check(u_char *p, size_t len) {
-  struct ether_header *ether = (struct ether_header *)p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)(ether + 1);
-  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *)(ip6 + 1);
-  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)(nd_ns + 1);
+static int nd_ns_check(u_char *p, size_t len) {
+  struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
   debug("Receive a packet with captured length %zu", len);
 
-  if (len < sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns)) {
-    debug("Truncated packet");
+  if (len < sizeof(struct raw_nd_ns)) {
+    debug("Truncated packet or NS with unspecified source IPv6 address.");
     return 0;
   }
 
-  if (ntohs(ether->ether_type) != ETHERTYPE_IPV6) {
+  if (ntohs(ns->eth_hdr.ether_type) != ETHERTYPE_IPV6) {
     debug("Not an IPv6 packet.");
     return 0;
   }
 
-  if (len != sizeof(*ether) + sizeof(*ip6) + ntohs(ip6->ip6_plen)) {
+  if (len != sizeof(struct ether_header) + sizeof(struct ip6_hdr) +
+                 ntohs(ns->ip6_hdr.ip6_plen)) {
     debug("IPv6 payload length %u missmatches captured length.",
-          ntohs(ip6->ip6_plen));
+          ntohs(ns->ip6_hdr.ip6_plen));
     return 0;
   }
 
-  if (ip6->ip6_nxt != IPPROTO_ICMPV6) {
+  if (ns->ip6_hdr.ip6_nxt != IPPROTO_ICMPV6) {
     debug("Not an ICMPv6 packet.");
     return 0;
   }
 
-  if (nd_ns->nd_ns_type != ND_NEIGHBOR_SOLICIT) {
+  if (ns->ns_hdr.nd_ns_type != ND_NEIGHBOR_SOLICIT) {
     debug("Not a ND_NS packet.");
     return 0;
   }
 
-  // ND_NS has at most one ND option.
-  if (len == sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns)) {
-    return 1;
-  } else if (len == sizeof(*ether) + sizeof(*ip6) + sizeof(*nd_ns) +
-                        8 * nd_opt->nd_opt_len) {
-    return nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR &&
-           nd_opt->nd_opt_len == 1;
-    debug("Unsupported ND opton, type: %u, len %u", nd_opt->nd_opt_type,
-          nd_opt->nd_opt_len);
+  // ND_NS with specified address, that is no unspecified address, has at least
+  // one ND option.
+  if (len == sizeof(struct raw_nd_ns)) {
+    return ns->opt_hdr.nd_opt_type == ND_OPT_SOURCE_LINKADDR &&
+           ns->opt_hdr.nd_opt_len == 1;
+    debug("Unsupported ND opton, type: %u, len %u", ns->opt_hdr.nd_opt_type,
+          ns->opt_hdr.nd_opt_len);
   }
 
   debug("More than one ND optoins.");
   return 0;
 }
 
-void ndp_process(u_char *p) {
+void print_nd_ns(u_char *p) {
+  struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
   char ntop_buf[INET6_ADDRSTRLEN];
-  struct ether_header *ether = (struct ether_header *)p;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)(ether + 1);
-  struct nd_neighbor_solicit *nd_ns = (struct nd_neighbor_solicit *)(ip6 + 1);
-  struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)(nd_ns + 1);
 
-  debug("[Dst MAC]: %s", ether_ntoa((struct ether_addr *)ether->ether_dhost));
-  debug("[Src MAC]: %s", ether_ntoa((struct ether_addr *)ether->ether_shost));
+  debug("[Dst MAC]: %s",
+        ether_ntoa((struct ether_addr *)&ns->eth_hdr.ether_dhost));
+  debug("[Src MAC]: %s",
+        ether_ntoa((struct ether_addr *)&ns->eth_hdr.ether_shost));
 
-  inet_ntop(AF_INET6, &ip6->ip6_src, ntop_buf, sizeof(ntop_buf));
+  inet_ntop(AF_INET6, &ns->ip6_hdr.ip6_src, ntop_buf, sizeof(ntop_buf));
   debug("[Src IPv6]: %s", ntop_buf);
 
-  inet_ntop(AF_INET6, &ip6->ip6_dst, ntop_buf, sizeof(ntop_buf));
+  inet_ntop(AF_INET6, &ns->ip6_hdr.ip6_dst, ntop_buf, sizeof(ntop_buf));
   debug("[Dst IPv6]: %s", ntop_buf);
 
-  debug("[ICMPv6]: type: %u, code: %u", nd_ns->nd_ns_type, nd_ns->nd_ns_code);
+  debug("[ICMPv6]: type: %u, code: %u", ns->ns_hdr.nd_ns_type,
+        ns->ns_hdr.nd_ns_code);
 
-  inet_ntop(AF_INET6, &nd_ns->nd_ns_target, ntop_buf, sizeof(ntop_buf));
+  inet_ntop(AF_INET6, &ns->ns_hdr.nd_ns_target, ntop_buf, sizeof(ntop_buf));
   debug("[ND_NS]: target: %s", ntop_buf);
 
   // ND_NS may have a ND optoin
   if (ip6->ip6_plen > sizeof(*nd_ns)) {
-    debug("[ND_OPT]: type: %d, len: %d", nd_opt->nd_opt_type,
+    debug("[ND_OPT]: type: %d, len: %d", ns->opt_hdr.nd_opt_type,
           nd_opt->nd_opt_len);
-    debug("[ND_MAC]: %s", ether_ntoa((struct ether_addr *)(nd_opt + 1)));
+    debug("[ND_MAC]: %s", ether_ntoa(&ns->opt_lladr));
   }
 }
 
+void nd_ns_process(u_char *p) { debug("Receive a ND NS packet."); }
+
+void nd_na_send(struct in6_addr *dest_addr, struct in6_addr *target_addr) {
+  struct nd_na na = {
+      .na_hdr =
+          {
+              .nd_na_type = ND_NEIGHBOR_ADVERT,
+              .nd_na_flags_reserved = ND_NA_FLAG_SOLICITED,
+              .nd_na_target = *target_addr,
+          },
+      .opt_hdr =
+          {
+              .nd_opt_type = ND_OPT_TARGET_LINKADDR,
+              .nd_opt_len = 1,
+          },
+      .opt_lladr = ii.eth_addr,
+  };
+  struct iovec iov = {
+      .iov_base = &na,
+      .iov_len = sizeof(na),
+  };
+  struct sockaddr_in6 sin6 = {
+      .sin6_len = sizeof(sa_family_t),
+      .sin6_family = AF_INET6,
+      .sin6_port = htons(IPPROTO_ICMPV6),
+      .sin6_addr = *dest_addr,
+  };
+  struct msghdr mhdr = {
+      .msg_name = &sin6,
+      .msg_namelen = sizeof(sin6),
+      .msg_iov = &iov,
+      .msg_iovlen = 1,
+  };
+
+  sendmsg(ii.sock, &mhdr, 0);
+};
+
 void ndp_show_loop(void) {
-  struct pollfd pfd;
+  struct pollfd pfd = {
+      .fd = ii.bpf_fd,
+      .events = POLLIN,
+  };
   int ndfs, timeout = INFTIM;
   ssize_t length;
   u_char *buf, *buf_limit;
   struct bpf_hdr *bh;
 
-  pfd.fd = ii.bpf_fd;
-  pfd.events = POLLIN;
-
   while (1) {
 
-    ndfs = poll(&pfd, 1, -1);
+    ndfs = poll(&pfd, 1, timeout);
     if (ndfs == -1) {
       if (errno == EINTR)
         continue;
@@ -311,8 +359,10 @@ void ndp_show_loop(void) {
       debug("BPF header length: %u, captured length: %lu", bh->bh_hdrlen,
             bh->bh_caplen);
 
-      if (ndp_check(buf + bh->bh_hdrlen, bh->bh_caplen))
-        ndp_process(buf + bh->bh_hdrlen);
+      if (nd_ns_check(buf + bh->bh_hdrlen, bh->bh_caplen)) {
+        print_nd_ns(buf + bh->bh_hdrlen);
+        nd_ns_process(buf + bh->bh_hdrlen);
+      }
 
       buf += BPF_WORDALIGN(bh->bh_hdrlen + bh->bh_caplen);
     }
