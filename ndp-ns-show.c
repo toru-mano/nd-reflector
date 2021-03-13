@@ -282,38 +282,55 @@ void print_nd_ns(u_char *p) {
 void nd_ns_process(u_char *p) { debug("Receive a ND NS packet."); }
 
 void nd_na_send(struct in6_addr *dest_addr, struct in6_addr *target_addr) {
-  struct nd_na na = {
-      .na_hdr =
-          {
-              .nd_na_type = ND_NEIGHBOR_ADVERT,
-              .nd_na_flags_reserved = ND_NA_FLAG_SOLICITED,
-              .nd_na_target = *target_addr,
-          },
-      .opt_hdr =
-          {
-              .nd_opt_type = ND_OPT_TARGET_LINKADDR,
-              .nd_opt_len = 1,
-          },
-      .opt_lladr = ii.eth_addr,
-  };
-  struct iovec iov = {
-      .iov_base = &na,
-      .iov_len = sizeof(na),
-  };
-  struct sockaddr_in6 sin6 = {
-      .sin6_len = sizeof(sa_family_t),
-      .sin6_family = AF_INET6,
-      .sin6_port = htons(IPPROTO_ICMPV6),
-      .sin6_addr = *dest_addr,
-  };
-  struct msghdr mhdr = {
-      .msg_name = &sin6,
-      .msg_namelen = sizeof(sin6),
-      .msg_iov = &iov,
-      .msg_iovlen = 1,
+  struct msghdr msg;
+  struct sockaddr_in6 sin6;
+  struct iovec iov;
+  struct nd_na na;
+  struct in6_pktinfo ipi6;
+  struct cmsghdr *cmsg;
+  uint8_t cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
+
+  // Assemble a ND_NA packet
+  memset(&na, 0, sizeof(na));
+  na.na_hdr.nd_na_type = ND_NEIGHBOR_ADVERT;
+  na.na_hdr.nd_na_flags_reserved = ND_NA_FLAG_SOLICITED;
+  na.na_hdr.nd_na_target = *target_addr;
+  na.opt_hdr.nd_opt_type = ND_OPT_TARGET_LINKADDR;
+  na.opt_hdr.nd_opt_len = 1;
+  na.opt_lladr = ii.eth_addr;
+
+  iov.iov_base = &na;
+  iov.iov_len = sizeof(na);
+
+  // Set destination IPv6 address
+  memset(&sin6, 0, sizeof(sin6));
+  sin6.sin6_len = sizeof(sa_family_t);
+  sin6.sin6_family = AF_INET6;
+  sin6.sin6_port = htons(IPPROTO_ICMPV6);
+  sin6.sin6_addr = *dest_addr;
+
+  memset(&ipi6, 0, sizeof(ipi6));
+
+  // Find index of the outgoing interface
+  if ((ipi6.ipi6_ifindex = if_nametoindex(ii.if_name)) == 0) {
+    errorx("Interface does not exist %s", ii.if_name);
   };
 
-  sendmsg(ii.sock, &mhdr, 0);
+  memset(&msg, 0, sizeof(msg));
+  msg.msg_name = &sin6;
+  msg.msg_namelen = sizeof(sin6);
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  msg.msg_control = &cmsgbuf;
+  msg.msg_controllen = sizeof(cmsgbuf);
+
+  cmsg = CMSG_FIRSTHDR(&msg);
+  cmsg->cmsg_len = CMSG_LEN(sizeof(ipi6));
+  cmsg->cmsg_level = IPPROTO_IPV6;
+  cmsg->cmsg_type = IPV6_PKTINFO;
+  *(struct in6_pktinfo *)CMSG_DATA(cmsg) = ipi6;
+
+  sendmsg(ii.sock, &msg, 0);
 };
 
 void ndp_show_loop(void) {
