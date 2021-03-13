@@ -29,10 +29,11 @@
 #include <unistd.h>
 
 struct if_info {
-  int bpf_fd;                 /* BPF file descriptor for ND_NS receipt */
-  int sock;                   /* Raw ICMPv6 socket for ND_NA sending */
   char if_name[IFNAMSIZ];     /* if name, e.g. "en0" */
   struct ether_addr eth_addr; /* Ethernet address of this iface */
+  struct sockaddr_in6 sin6;
+  int bpf_fd;                 /* BPF file descriptor for ND_NS receipt */
+  int sock;                   /* Raw ICMPv6 socket for ND_NA sending */
   u_char *buf;                /* bpf read buffer */
   size_t buf_max;             /* Allocated buffer size */
 } ii;
@@ -53,17 +54,33 @@ struct nd_na {
 
 void lookup_addrs(char *);
 int open_bpf(char *);
+int open_sock(char *);
 void ndp_show_loop(void);
+void nd_na_send(struct in6_addr *, struct in6_addr *);
 void error(const char *, ...);
 void errorx(const char *, ...);
 void debug(const char *, ...);
+
 
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
   char if_name[] = "hvn1";
-  lookup_addrs(if_name);
-  ii.bpf_fd = open_bpf(if_name);
+  struct in6_addr dest, target;
+  char pton_buf[INET6_ADDRSTRLEN];
+    
+  strncpy(ii.if_name, if_name, sizeof(if_name));
+  inet_pton(AF_INET6, "fe80::215:5dff:fe5e:f08", &dest);
+  /* inet_pton(AF_INET6, "fe80::215:5dff:fe5e:f05", &dest); */
+  inet_pton(AF_INET6, "fe80::215:5dff:fe5e:f05", &target);
+  /* inet_pton(AF_INET6, "2001:db:2222::2", &target); */
+
+
+  lookup_addrs(ii.if_name);
+  ii.bpf_fd = open_bpf(ii.if_name);
+  ii.sock =  open_sock(ii.if_name);
+  
+  nd_na_send(&dest, &target);
   ndp_show_loop();
   exit(0);
 }
@@ -150,6 +167,44 @@ int open_bpf(char *if_name) {
 
   return fd;
 }
+int open_sock(char *if_name) {
+  int fd;
+  struct ifreq ifr;
+  int hops = 255, on = 1;
+  struct icmp6_filter filter;
+
+  // Create a raw socket for ICMPv6 .
+  if ((fd = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6)) < 0)
+    error("socket");
+  
+  debug("Open raw socket for ICMPV6: %d", fd);
+
+  // Set hop limit to 255.
+  if (setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hops, sizeof(hops)) <
+      0) {
+    error("setsockopt(IPV6_MULTICAST_HOPS)");
+  }
+
+  if (setsockopt(fd, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hops, sizeof(hops)) <
+      0) {
+    error("setsockopt(IPV6_UNICAST_HOPS)");
+  }
+
+  // Switch to non-blocking mode.
+  if (ioctl(fd, FIONBIO, &on) < 0) {
+    error("ioctl(FIONBIO)");
+  };
+
+  // Restrict to ND_NA
+  ICMP6_FILTER_SETBLOCKALL(&filter);
+  ICMP6_FILTER_SETPASS(ND_NEIGHBOR_ADVERT, &filter);
+  if (setsockopt(fd, IPPROTO_ICMPV6, ICMP6_FILTER, &filter, sizeof(filter)) <
+      0) {
+    error("setsockopt(ICMP6_FILTER)");
+  }
+
+  return fd;
+}
 
 /*
  * List Ethernet addresses, IPv4 addresses, and IPv4 addresses of given the
@@ -192,10 +247,10 @@ void lookup_addrs(char *if_name) {
       break;
 
     case AF_INET6:
-      sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
-      if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
+      ii.sin6 = *(struct sockaddr_in6 *)ifa->ifa_addr;
+      if (!inet_ntop(AF_INET6, &ii.sin6.sin6_addr, ntop_buf, sizeof(ntop_buf)))
         error("inet_ntop");
-      debug("%s [IPv6]: %s", ifa->ifa_name, ntop_buf);
+      debug("%s [IPv6]: %s, %u", ifa->ifa_name, ntop_buf, ii.sin6.sin6_scope_id);
       break;
     }
   }
@@ -272,9 +327,9 @@ void print_nd_ns(u_char *p) {
   debug("[ND_NS]: target: %s", ntop_buf);
 
   // ND_NS may have a ND optoin
-  if (ip6->ip6_plen > sizeof(*nd_ns)) {
+  if (ns->ip6_hdr.ip6_plen > sizeof(struct nd_neighbor_solicit)) {
     debug("[ND_OPT]: type: %d, len: %d", ns->opt_hdr.nd_opt_type,
-          nd_opt->nd_opt_len);
+          ns->opt_hdr.nd_opt_len);
     debug("[ND_MAC]: %s", ether_ntoa(&ns->opt_lladr));
   }
 }
@@ -289,12 +344,14 @@ void nd_na_send(struct in6_addr *dest_addr, struct in6_addr *target_addr) {
   struct in6_pktinfo ipi6;
   struct cmsghdr *cmsg;
   uint8_t cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
+  ssize_t n;
 
   // Assemble a ND_NA packet
   memset(&na, 0, sizeof(na));
   na.na_hdr.nd_na_type = ND_NEIGHBOR_ADVERT;
   na.na_hdr.nd_na_flags_reserved = ND_NA_FLAG_SOLICITED;
   na.na_hdr.nd_na_target = *target_addr;
+  /* memcpy(&na.na_hdr.nd_na_target, target_addr, sizeof(struct in6_addr)); */
   na.opt_hdr.nd_opt_type = ND_OPT_TARGET_LINKADDR;
   na.opt_hdr.nd_opt_len = 1;
   na.opt_lladr = ii.eth_addr;
@@ -304,33 +361,55 @@ void nd_na_send(struct in6_addr *dest_addr, struct in6_addr *target_addr) {
 
   // Set destination IPv6 address
   memset(&sin6, 0, sizeof(sin6));
-  sin6.sin6_len = sizeof(sa_family_t);
+  sin6.sin6_len = sizeof(sin6);
   sin6.sin6_family = AF_INET6;
   sin6.sin6_port = htons(IPPROTO_ICMPV6);
   sin6.sin6_addr = *dest_addr;
+  sin6.sin6_scope_id = if_nametoindex(ii.if_name);
+  /* memcpy(&sin6.sin6_addr, dest_addr, sizeof(struct in6_addr)); */
 
   memset(&ipi6, 0, sizeof(ipi6));
 
-  // Find index of the outgoing interface
-  if ((ipi6.ipi6_ifindex = if_nametoindex(ii.if_name)) == 0) {
-    errorx("Interface does not exist %s", ii.if_name);
-  };
+  /* inet_pton(AF_INET6, "fe80::215:5dff:fe5e:f05", &ipi6.ipi6_addr); */
+  /* Find index of the outgoing interface */
+  /* if ((ipi6.ipi6_ifindex = if_nametoindex(ii.if_name)) == 0) { */
+  /*   errorx("Interface does not exist %s", ii.if_name); */
+  /* }; */
+
+  /* ipi6.ipi6_addr = ii.sin6.sin6_addr; */
+  /* ipi6.ipi6_ifindex = ii.sin6.sin6_scope_id; */
+  /* ipi6.ipi6_ifindex = if_nametoindex(ii.if_name); */
+  
+  char ntop_buf[INET6_ADDRSTRLEN];
+  inet_ntop(AF_INET6, &ipi6.ipi6_addr, ntop_buf, sizeof(ntop_buf));
+  debug("[ND_NA]: src: %s", ntop_buf);
+  inet_ntop(AF_INET6, &sin6.sin6_addr, ntop_buf, sizeof(ntop_buf));
+  debug("[ND_NA]: dst: %s", ntop_buf);
+  inet_ntop(AF_INET6, target_addr, ntop_buf, sizeof(ntop_buf));
+  debug("[ND_NA]: tgt: %s", ntop_buf);
+
+  debug("Destination interface index is %u", sin6.sin6_scope_id);  
+  /* debug("Sendmsg interface index is %u", ipi6.ipi6_ifindex); */
 
   memset(&msg, 0, sizeof(msg));
   msg.msg_name = &sin6;
   msg.msg_namelen = sizeof(sin6);
   msg.msg_iov = &iov;
   msg.msg_iovlen = 1;
-  msg.msg_control = &cmsgbuf;
-  msg.msg_controllen = sizeof(cmsgbuf);
+  /* msg.msg_control = &cmsgbuf; */
+  /* msg.msg_controllen = sizeof(cmsgbuf); */
 
-  cmsg = CMSG_FIRSTHDR(&msg);
-  cmsg->cmsg_len = CMSG_LEN(sizeof(ipi6));
-  cmsg->cmsg_level = IPPROTO_IPV6;
-  cmsg->cmsg_type = IPV6_PKTINFO;
-  *(struct in6_pktinfo *)CMSG_DATA(cmsg) = ipi6;
+  /* cmsg = CMSG_FIRSTHDR(&msg); */
+  /* cmsg->cmsg_len = CMSG_LEN(sizeof(ipi6)); */
+  /* cmsg->cmsg_level = IPPROTO_IPV6; */
+  /* cmsg->cmsg_type = IPV6_PKTINFO; */
+  /* *(struct in6_pktinfo *)CMSG_DATA(cmsg) = ipi6; */
 
-  sendmsg(ii.sock, &msg, 0);
+  if((n = sendmsg(ii.sock, &msg, 0)) == -1) {
+    error("sendmsg in nd_na_send: ");
+  }
+  
+  debug("Send %zd characters.", n);
 };
 
 void ndp_show_loop(void) {
