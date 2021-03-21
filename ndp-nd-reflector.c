@@ -64,6 +64,7 @@ int open_bpf(char *);
 void ndp_show_loop(void);
 void nd_na_send(struct ether_addr *, struct in6_addr *, struct in6_addr *);
 void print_nbr_state(struct in6_addr *);
+int lookup_ndp_table(char *, struct in6_addr *);
 void error(const char *, ...);
 void errorx(const char *, ...);
 void debug(const char *, ...);
@@ -73,26 +74,8 @@ int dflag = 1;
 int main(int argc, char *argv[]) {
   char wan_if[] = "hvn1";
   char lan_if[] = "hvn2";
-  struct in6_addr addr;
-
-  char pton_buf[INET6_ADDRSTRLEN];
-
-
-  if (argc != 2) {
-    errorx("No address is given.");
-  }
-
-  strncpy(pton_buf, argv[1], sizeof(pton_buf));
-
-  if (inet_pton(AF_INET6,pton_buf, &addr) != 1) {
-    error("inet_pton: %s", pton_buf);
-  }
   strncpy(wan.if_name, wan_if, sizeof(wan.if_name));
   strncpy(lan.if_name, lan_if, sizeof(lan.if_name));
-
-  print_nbr_state(&addr);
-
-  exit(0);
 
   lookup_addrs(wan.if_name);
   wan.bpf_fd = open_bpf(wan.if_name);
@@ -183,13 +166,13 @@ int open_bpf(char *if_name) {
 
   return fd;
 }
+
 /*
  * List Ethernet addresses, IPv4 addresses, and IPv4 addresses of given the
  * interface name.
  */
 void lookup_addrs(char *if_name) {
   struct ifaddrs *ifap, *ifa;
-  struct in6_ifaddrs *i6fap;
   struct sockaddr *sa;
   struct sockaddr_dl *sdl;
   struct sockaddr_in *sin;
@@ -247,6 +230,56 @@ void lookup_addrs(char *if_name) {
   if (!found)
     errorx("Interface not found %s\n", if_name);
 }
+
+/*
+ * Does the interface has the given IPV6 address addr?
+ * If the interface `if_name` has IPv6 address `addr` then return 1 otherwise 0.
+ * When an error occurs, this function returns -1.
+ */
+int
+lookup_in6_addr(char *if_name, struct in6_addr *addr) {
+  struct ifaddrs *ifap, *ifa;
+  struct sockaddr_in6 *sin6;
+
+  int found = 0;
+  char ntop_buf[INET6_ADDRSTRLEN];
+
+  if (!inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf)))
+    error("inet_ntop");
+
+  debug("lookup_in6_addr: Does interface %s has IPv6 address %s?", if_name, ntop_buf);
+
+
+  if (getifaddrs(&ifap) != 0)
+    error("getifaddrs");
+
+  for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+
+    if (strcmp(ifa->ifa_name, if_name)) {
+      debug("lookup_in6_addr: Skip interface %s", ifa->ifa_name);
+      continue;
+    }
+
+    if (ifa->ifa_addr->sa_family == AF_INET6) {
+      sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+
+      if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
+        // Clear scope id from address
+        sin6->sin6_scope_id = ntohs(*(u_int16_t *)&sin6->sin6_addr.s6_addr[2]);
+        sin6->sin6_addr.s6_addr[2] = sin6->sin6_addr.s6_addr[3] = 0;
+      }
+
+      if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, addr)) {
+        found = 1;
+      };
+
+    }
+  }
+  freeifaddrs(ifap);
+
+  return found;
+}
+
 
 static int nd_ns_check(u_char *p, size_t len) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
@@ -350,15 +383,71 @@ void nd_ns_process(u_char *p) {
 
   // do sanity check
   // ether source address == nd_opt source link-layer address
+  if (strncmp(ns->eth_hdr.ether_shost, (caddr_t) &ns->opt_lladr, ETHER_ADDR_LEN) != 0) {
+    debug("(nd_ns_process: ether source does not match NS source link-layer address.");
+    return;
+  };
 
   // XXX: check this ND_NS should be proxied
+  // NS target address is not unspecified
+  if (IN6_IS_ADDR_UNSPECIFIED(&ns->ns_hdr.nd_ns_target)) {
+    debug("nd_ns_process: NS target address is unspecified.");
+    return;
+  }
+
   // NS target address is not multicast
-  // NS target address is not address of this node
-  // NS target address is on NDP table / how to check?
-  print_nbr_state(&ns->ns_hdr.nd_ns_target);
+  if (IN6_IS_ADDR_MULTICAST(&ns->ns_hdr.nd_ns_target)) {
+    debug("nd_ns_process: NS target address is multicast address.");
+    return;
+  }
+
+  // NS target address is not address of WAN if address
+  if (lookup_in6_addr(wan.if_name, &ns->ns_hdr.nd_ns_target) != 0) {
+    debug("nd_ns_process: NS target address is WAN local address.");
+    return;
+  };
+
+  // NS target address is on NDP table on LAN if
+  if (lookup_ndp_table(lan.if_name, &ns->ns_hdr.nd_ns_target)) {
+    debug("nd_ns_process: NS target address is found in LAN NDP table.");
+  } else {
+    debug("nd_ns_process: NS target address is not found in LAN NDP table.");
+  }
 
   /* nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost, &ns->ip6_hdr.ip6_src, */
   /*            &ns->ns_hdr.nd_ns_target); */
+}
+
+/*
+ * Does the NDP table of the interface has a possible reachable entry of given
+address?
+ * Return 1 if it has entry otherwise 0.
+ */
+int lookup_ndp_table(char *if_name, struct in6_addr *addr) {
+  struct in6_nbrinfo nbi;
+
+  char ntop_buf[INET6_ADDRSTRLEN];
+
+  inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf));
+  debug("Lookup NDP table of %s for %s", if_name, ntop_buf);
+
+  if (getnbrinfo(&nbi, addr, lan.if_name) == 0) {
+    debug("NDP state: %d", nbi.state);
+
+    switch (nbi.state) {
+    case ND6_LLINFO_REACHABLE:
+    case ND6_LLINFO_STALE:
+    case ND6_LLINFO_DELAY:
+    case ND6_LLINFO_PROBE:
+      return 1;
+    default:
+      return 0;
+    }
+
+  } else {
+    debug("Failed to get NDP state.");
+    return 0;
+  }
 }
 
 
