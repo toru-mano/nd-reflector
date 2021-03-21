@@ -233,7 +233,9 @@ void lookup_addrs(char *if_name) {
 
 /*
  * Does the interface has the given IPV6 address addr?
- * If the interface `if_name` has IPv6 address `addr` then return 1 otherwise 0.
+ * If the interface `if_name` has IPv6 address `addr` then return 1.
+ * If it has the address whose first 64 bits are equa to `addr` then return 2.
+ * Otherwise 0.
  * When an error occurs, this function returns -1.
  */
 int
@@ -263,14 +265,23 @@ lookup_in6_addr(char *if_name, struct in6_addr *addr) {
     if (ifa->ifa_addr->sa_family == AF_INET6) {
       sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
 
+      if (IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr))
+        continue;
+
       if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
         // Clear scope id from address
         sin6->sin6_scope_id = ntohs(*(u_int16_t *)&sin6->sin6_addr.s6_addr[2]);
         sin6->sin6_addr.s6_addr[2] = sin6->sin6_addr.s6_addr[3] = 0;
+        // maybe we should skip.?
       }
 
       if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, addr)) {
-        found = 1;
+        return 1;
+      };
+
+      if (((uint32_t)sin6->sin6_addr.s6_addr[0] == (uint32_t)addr->s6_addr[0]) &&
+          ((uint32_t)sin6->sin6_addr.s6_addr[4] == (uint32_t)addr->s6_addr[4]))  {
+        found = 2;
       };
 
     }
@@ -402,21 +413,20 @@ void nd_ns_process(u_char *p) {
   }
 
   // NS target address is not address of WAN if address
-  if (lookup_in6_addr(wan.if_name, &ns->ns_hdr.nd_ns_target) != 0) {
+  if (lookup_in6_addr(wan.if_name, &ns->ns_hdr.nd_ns_target) == 1) {
     debug("nd_ns_process: NS target address is WAN local address.");
     return;
   };
 
-  // NS target address is on NDP table on LAN if
-  if (lookup_ndp_table(lan.if_name, &ns->ns_hdr.nd_ns_target)) {
-    debug("nd_ns_process: NS target address is found in LAN NDP table.");
+  // NS target address is LAN if address or in LAN subnet /64.
+  if (lookup_in6_addr(lan.if_name, &ns->ns_hdr.nd_ns_target) > 0) {
+    debug("nd_ns_process: NS target address is found in LAN if or subnet.");
 
     nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost, &ns->ip6_hdr.ip6_src,
              &ns->ns_hdr.nd_ns_target);
   } else {
-    debug("nd_ns_process: NS target address is not found in LAN NDP table.");
+    debug("nd_ns_process: NS target address is not found in LAN if or subnet.");
   }
-
 
 }
 
