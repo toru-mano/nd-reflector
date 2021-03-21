@@ -10,9 +10,11 @@
 #include <netinet/in.h>
 
 #include <netinet/if_ether.h>
+#include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
 
 #include <netinet/icmp6.h>
+#include <netinet6/nd6.h>
 
 #include <arpa/inet.h>
 
@@ -28,14 +30,18 @@
 #include <string.h>
 #include <unistd.h>
 
-struct if_info {
+struct lan_if {
+  char if_name[IFNAMSIZ];
+} lan;
+
+struct wan_if {
   char if_name[IFNAMSIZ];     /* if name, e.g. "en0" */
   struct ether_addr eth_addr; /* Ethernet address of this iface */
   struct sockaddr_in6 sin6; /* IPv6 Link Local address without embed scope id*/
   int bpf_fd;               /* BPF file descriptor for ND_NS receipt */
   u_char *buf;              /* bpf read buffer */
   size_t buf_max;           /* Allocated buffer size */
-} ii;
+} wan;
 
 struct raw_nd_ns {
   struct ether_header eth_hdr;
@@ -57,6 +63,7 @@ void lookup_addrs(char *);
 int open_bpf(char *);
 void ndp_show_loop(void);
 void nd_na_send(struct ether_addr *, struct in6_addr *, struct in6_addr *);
+void print_nbr_state(struct in6_addr *);
 void error(const char *, ...);
 void errorx(const char *, ...);
 void debug(const char *, ...);
@@ -64,12 +71,31 @@ void debug(const char *, ...);
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
-  char if_name[] = "hvn1";
+  char wan_if[] = "hvn1";
+  char lan_if[] = "hvn2";
+  struct in6_addr addr;
 
-  strncpy(ii.if_name, if_name, sizeof(if_name));
+  char pton_buf[INET6_ADDRSTRLEN];
 
-  lookup_addrs(ii.if_name);
-  ii.bpf_fd = open_bpf(ii.if_name);
+
+  if (argc != 2) {
+    errorx("No address is given.");
+  }
+
+  strncpy(pton_buf, argv[1], sizeof(pton_buf));
+
+  if (inet_pton(AF_INET6,pton_buf, &addr) != 1) {
+    error("inet_pton: %s", pton_buf);
+  }
+  strncpy(wan.if_name, wan_if, sizeof(wan.if_name));
+  strncpy(lan.if_name, lan_if, sizeof(lan.if_name));
+
+  print_nbr_state(&addr);
+
+  exit(0);
+
+  lookup_addrs(wan.if_name);
+  wan.bpf_fd = open_bpf(wan.if_name);
 
   ndp_show_loop();
   exit(0);
@@ -126,11 +152,11 @@ int open_bpf(char *if_name) {
     error("ioctl(BIOCGBLEN)");
 
   /* Allocate buffer for BPF read */
-  ii.buf_max = sz;
-  ii.buf = malloc(ii.buf_max);
-  if (!ii.buf)
-    errorx("malloc for BFP buffer %zu byte", ii.buf_max);
-  debug("Allocate %zu Bytes buffer for BPF descriptor.", ii.buf_max);
+  wan.buf_max = sz;
+  wan.buf = malloc(wan.buf_max);
+  if (!wan.buf)
+    errorx("malloc for BFP buffer %zu byte", wan.buf_max);
+  debug("Allocate %zu Bytes buffer for BPF descriptor.", wan.buf_max);
 
   /*
    * Check that the data link layer is an Ethernet; this code won't work with
@@ -187,8 +213,8 @@ void lookup_addrs(char *if_name) {
     case AF_LINK:
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
-        ii.eth_addr = *(struct ether_addr *)LLADDR(sdl);
-        debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa(&ii.eth_addr));
+        wan.eth_addr = *(struct ether_addr *)LLADDR(sdl);
+        debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa(&wan.eth_addr));
         found = 1;
       }
       break;
@@ -205,7 +231,7 @@ void lookup_addrs(char *if_name) {
         // Clear scope id from address
         sin6->sin6_scope_id = ntohs(*(u_int16_t *)&sin6->sin6_addr.s6_addr[2]);
         sin6->sin6_addr.s6_addr[2] = sin6->sin6_addr.s6_addr[3] = 0;
-        ii.sin6 = *sin6;
+        wan.sin6 = *sin6;
       }
 
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
@@ -297,6 +323,28 @@ void print_nd_ns(u_char *p) {
   }
 }
 
+int
+getnbrinfo(struct in6_nbrinfo *nbi, struct in6_addr *addr, char *if_name)
+{
+  int s;
+
+  if ((s = socket(AF_INET6, SOCK_DGRAM, 0)) == -1)
+    error("socket");
+
+  memset(nbi, 0, sizeof(*nbi));
+  strncpy(nbi->ifname, if_name, sizeof(nbi->ifname));
+  nbi->addr = *addr;
+
+  if (ioctl(s, SIOCGNBRINFO_IN6, (caddr_t)nbi) == -1) {
+    debug("ioctl(SIOCGNBRINFO_IN6) %s", nbi->ifname);
+    close(s);
+    return -1;
+  }
+
+  close(s);
+  return 0;
+}
+
 void nd_ns_process(u_char *p) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
@@ -307,9 +355,48 @@ void nd_ns_process(u_char *p) {
   // NS target address is not multicast
   // NS target address is not address of this node
   // NS target address is on NDP table / how to check?
+  print_nbr_state(&ns->ns_hdr.nd_ns_target);
 
-  nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost, &ns->ip6_hdr.ip6_src,
-             &ns->ns_hdr.nd_ns_target);
+  /* nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost, &ns->ip6_hdr.ip6_src, */
+  /*            &ns->ns_hdr.nd_ns_target); */
+}
+
+
+void
+print_nbr_state(struct in6_addr *add) {
+  struct in6_nbrinfo nbi;
+  char ntop_buf[INET6_ADDRSTRLEN];
+
+  inet_ntop(AF_INET6, add, ntop_buf, sizeof(ntop_buf));
+  debug("Get neighbor info of %s", ntop_buf);
+
+  if (getnbrinfo(&nbi, add, lan.if_name) == 0) {
+    switch (nbi.state) {
+    case ND6_LLINFO_NOSTATE:
+      debug("NOSTATE");
+      break;
+    case ND6_LLINFO_INCOMPLETE:
+      debug("INCOMPLETE");
+      break;
+    case ND6_LLINFO_REACHABLE:
+      debug("REACHABLE");
+      break;
+    case ND6_LLINFO_STALE:
+      debug("STALE");
+      break;
+    case ND6_LLINFO_DELAY:
+      debug("DELAY");
+      break;
+    case ND6_LLINFO_PROBE:
+      debug("PROBE");
+      break;
+    default:
+      debug("Unknown");
+      break;
+    }
+  } else {
+    debug("Faile to get neighbor info.");
+  }
 }
 
 void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
@@ -325,7 +412,7 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 
   // Ether header
   memcpy(&na.eth_hdr.ether_dhost, dst_ll_addr, ETHER_ADDR_LEN);
-  memcpy(&na.eth_hdr.ether_shost, &ii.eth_addr, ETHER_ADDR_LEN);
+  memcpy(&na.eth_hdr.ether_shost, &wan.eth_addr, ETHER_ADDR_LEN);
   na.eth_hdr.ether_type = htons(ETHERTYPE_IPV6);
 
   // IPv6 header
@@ -335,7 +422,7 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
             sizeof(struct ether_addr));
   na.ip6_hdr.ip6_nxt = IPPROTO_ICMPV6;
   na.ip6_hdr.ip6_hlim = 255;
-  na.ip6_hdr.ip6_src = ii.sin6.sin6_addr;
+  na.ip6_hdr.ip6_src = wan.sin6.sin6_addr;
   na.ip6_hdr.ip6_dst = *dest_addr;
 
   // ND_NA
@@ -344,7 +431,7 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
   na.na_hdr.nd_na_target = *target_addr;
   na.opt_hdr.nd_opt_type = ND_OPT_TARGET_LINKADDR;
   na.opt_hdr.nd_opt_len = 1;
-  na.opt_lladr = ii.eth_addr;
+  na.opt_lladr = wan.eth_addr;
 
   // Compute ICMPv6 checksum
   {
@@ -377,7 +464,7 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
     na.na_hdr.nd_na_hdr.icmp6_cksum = ~sum;
   }
 
-  if ((n = write(ii.bpf_fd, &na, sizeof(na))) == -1) {
+  if ((n = write(wan.bpf_fd, &na, sizeof(na))) == -1) {
     error("write");
   }
 
@@ -386,7 +473,7 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 
 void ndp_show_loop(void) {
   struct pollfd pfd = {
-      .fd = ii.bpf_fd,
+      .fd = wan.bpf_fd,
       .events = POLLIN,
   };
   int ndfs, timeout = INFTIM;
@@ -408,7 +495,7 @@ void ndp_show_loop(void) {
     }
 
   again:
-    length = read(pfd.fd, (char *)ii.buf, ii.buf_max);
+    length = read(pfd.fd, (char *)wan.buf, wan.buf_max);
 
     /* Don't choke when we get ptraced */
     if (length == -1 && errno == EINTR) {
@@ -418,8 +505,8 @@ void ndp_show_loop(void) {
     if (length == -1)
       error("read");
 
-    buf = ii.buf;
-    buf_limit = ii.buf + length;
+    buf = wan.buf;
+    buf_limit = wan.buf + length;
 
     while (buf < buf_limit) {
       bh = (struct bpf_hdr *)buf;
