@@ -410,12 +410,14 @@ void nd_ns_process(u_char *p) {
   // NS target address is on NDP table on LAN if
   if (lookup_ndp_table(lan.if_name, &ns->ns_hdr.nd_ns_target)) {
     debug("nd_ns_process: NS target address is found in LAN NDP table.");
+
+    nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost, &ns->ip6_hdr.ip6_src,
+             &ns->ns_hdr.nd_ns_target);
   } else {
     debug("nd_ns_process: NS target address is not found in LAN NDP table.");
   }
 
-  /* nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost, &ns->ip6_hdr.ip6_src, */
-  /*            &ns->ns_hdr.nd_ns_target); */
+
 }
 
 /*
@@ -495,6 +497,8 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
   struct cmsghdr *cmsg;
   uint8_t cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
   ssize_t n;
+
+  debug("Send ND_NA.");
 
   // Assemble a raw ND_NA packet
   memset(&na, 0, sizeof(na));
