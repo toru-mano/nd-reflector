@@ -173,12 +173,10 @@ int open_bpf(char *if_name) {
  */
 void lookup_addrs(char *if_name) {
   struct ifaddrs *ifap, *ifa;
-  struct sockaddr *sa;
   struct sockaddr_dl *sdl;
-  struct sockaddr_in *sin;
   struct sockaddr_in6 *sin6;
 
-  int found = 0;
+  int found = 0, found_dl = 0, found_in6 = 0;
   char ntop_buf[INET6_ADDRSTRLEN];
 
   if (getifaddrs(&ifap) != 0)
@@ -191,6 +189,8 @@ void lookup_addrs(char *if_name) {
       continue;
     }
 
+    found = 1;
+
     switch (ifa->ifa_addr->sa_family) {
 
     case AF_LINK:
@@ -198,13 +198,8 @@ void lookup_addrs(char *if_name) {
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
         wan.eth_addr = *(struct ether_addr *)LLADDR(sdl);
         debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa(&wan.eth_addr));
-        found = 1;
+        found_dl = 1;
       }
-      break;
-
-    case AF_INET:
-      sin = (struct sockaddr_in *)ifa->ifa_addr;
-      debug("%s [IPv4]: %s\n", ifa->ifa_name, inet_ntoa(sin->sin_addr));
       break;
 
     case AF_INET6:
@@ -215,6 +210,7 @@ void lookup_addrs(char *if_name) {
         sin6->sin6_scope_id = ntohs(*(u_int16_t *)&sin6->sin6_addr.s6_addr[2]);
         sin6->sin6_addr.s6_addr[2] = sin6->sin6_addr.s6_addr[3] = 0;
         wan.sin6 = *sin6;
+        found_in6 = 1;
       }
 
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
@@ -229,6 +225,12 @@ void lookup_addrs(char *if_name) {
 
   if (!found)
     errorx("Interface not found %s\n", if_name);
+
+  if (!found_dl)
+    errorx("Interface %s has no Ether address\n", if_name);
+
+  if (!found_in6)
+    errorx("Interface %s hoas no IPv6 link local address\n", if_name);
 }
 
 /*
@@ -503,9 +505,6 @@ print_nbr_state(struct in6_addr *add) {
 void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
                 struct in6_addr *target_addr) {
   struct raw_nd_na na;
-  struct in6_pktinfo ipi6;
-  struct cmsghdr *cmsg;
-  uint8_t cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
   ssize_t n;
 
   debug("Send ND_NA.");
