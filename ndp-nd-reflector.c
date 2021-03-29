@@ -10,7 +10,6 @@
 #include <netinet/in.h>
 
 #include <netinet/if_ether.h>
-#include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
 
 #include <netinet/icmp6.h>
@@ -370,28 +369,6 @@ void print_nd_ns(u_char *p) {
           ns->opt_hdr.nd_opt_len);
     debug("[ND_MAC]: %s", ether_ntoa(&ns->opt_lladr));
   }
-}
-
-int
-getnbrinfo(struct in6_nbrinfo *nbi, struct in6_addr *addr, char *if_name)
-{
-  int s;
-
-  if ((s = socket(AF_INET6, SOCK_DGRAM, 0)) == -1)
-    error("socket");
-
-  memset(nbi, 0, sizeof(*nbi));
-  strncpy(nbi->ifname, if_name, sizeof(nbi->ifname));
-  nbi->addr = *addr;
-
-  if (ioctl(s, SIOCGNBRINFO_IN6, (caddr_t)nbi) == -1) {
-    debug("ioctl(SIOCGNBRINFO_IN6) %s", nbi->ifname);
-    close(s);
-    return -1;
-  }
-
-  close(s);
-  return 0;
 }
 
 void nd_ns_process(u_char *p) {
