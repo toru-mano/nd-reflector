@@ -13,7 +13,6 @@
 #include <netinet/ip6.h>
 
 #include <netinet/icmp6.h>
-#include <netinet6/nd6.h>
 
 #include <arpa/inet.h>
 
@@ -36,10 +35,10 @@ struct lan_if {
 struct wan_if {
   char if_name[IFNAMSIZ];     /* if name, e.g. "en0" */
   struct ether_addr eth_addr; /* Ethernet address of this iface */
-  struct sockaddr_in6 sin6; /* IPv6 Link Local address without embed scope id*/
-  int bpf_fd;               /* BPF file descriptor for ND_NS receipt */
-  u_char *buf;              /* bpf read buffer */
-  size_t buf_max;           /* Allocated buffer size */
+  struct sockaddr_in6 sin6;   /* IPv6 Link Local address without embed scope id*/
+  int bpf_fd;                 /* BPF file descriptor for ND_NS receipt */
+  u_char *buf;                /* bpf read buffer */
+  size_t buf_max;             /* Allocated buffer size */
 } wan;
 
 struct raw_nd_ns {
