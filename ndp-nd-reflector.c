@@ -8,10 +8,8 @@
 #include <net/if_types.h>
 
 #include <netinet/in.h>
-
 #include <netinet/if_ether.h>
 #include <netinet/ip6.h>
-
 #include <netinet/icmp6.h>
 
 #include <arpa/inet.h>
@@ -219,6 +217,12 @@ void setup_addrs(struct wan_if *wan) {
       debug("%s [IPv6]: %s, scope_id %u", ifa->ifa_name, ntop_buf,
             sin6->sin6_scope_id);
 
+      sin6 = (struct sockaddr_in6 *)ifa->ifa_netmask;
+      if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
+        error("inet_ntop");
+      debug("%s [IPv6 netmask]: %s, scope_id %u", ifa->ifa_name, ntop_buf,
+            sin6->sin6_scope_id);
+
       break;
     }
   }
@@ -237,16 +241,16 @@ void setup_addrs(struct wan_if *wan) {
 /*
  * Does the interface has the given IPV6 address addr?
  * If the interface `if_name` has IPv6 address `addr` then return 1.
- * If it has the address whose first 64 bits are equa to `addr` then return 2.
+ * If the address `addr` in the subnet of interface `if_name` then return 2.
  * Otherwise 0.
  * When an error occurs, this function returns -1.
  */
 int
 lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   struct ifaddrs *ifap, *ifa;
-  struct sockaddr_in6 *sin6;
-
+  struct sockaddr_in6 *sin6, *sin6_mask;
   int found = 0;
+  size_t i;
   char ntop_buf[INET6_ADDRSTRLEN];
 
   if (!inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf)))
@@ -278,12 +282,22 @@ lookup_in6_addr(char *if_name, struct in6_addr *addr) {
         // maybe we should skip.?
       }
 
+      // address in this interface.
+      debug("check interface address");
       if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, addr)) {
+        debug("found in this interface");
         return 1;
       };
 
-      if (((uint32_t)sin6->sin6_addr.s6_addr[0] == (uint32_t)addr->s6_addr[0]) &&
-          ((uint32_t)sin6->sin6_addr.s6_addr[4] == (uint32_t)addr->s6_addr[4]))  {
+      // address in this subnet?
+      debug("check interface subnet");
+      sin6_mask = (struct sockaddr_in6 *)ifa->ifa_netmask;
+      for (i = 0; i < sizeof(struct in6_addr); i++) {
+        if (((sin6->sin6_addr.s6_addr[i] ^ addr->s6_addr[i]) & sin6_mask->sin6_addr.s6_addr[i]) != 0)
+          break;
+      }
+      if (i == sizeof(struct in6_addr)) {
+        debug("found in this subnet");
         found = 2;
       };
 
