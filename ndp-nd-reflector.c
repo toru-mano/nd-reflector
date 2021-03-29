@@ -59,12 +59,12 @@ struct raw_nd_na {
   struct ether_addr opt_lladr;
 } __packed;
 
-void lookup_addrs(char *);
+char prog_name[] = "nd-reflector";
+
+void setup_addrs(struct wan_if *);
 int open_bpf(char *);
 void ndp_show_loop(void);
 void nd_na_send(struct ether_addr *, struct in6_addr *, struct in6_addr *);
-void print_nbr_state(struct in6_addr *);
-int lookup_ndp_table(char *, struct in6_addr *);
 void error(const char *, ...);
 void errorx(const char *, ...);
 void debug(const char *, ...);
@@ -72,12 +72,16 @@ void debug(const char *, ...);
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
-  char wan_if[] = "hvn1";
-  char lan_if[] = "hvn2";
-  strncpy(wan.if_name, wan_if, sizeof(wan.if_name));
-  strncpy(lan.if_name, lan_if, sizeof(lan.if_name));
+  if (argc != 3) {
+    errorx("usage: %s <wan_if_name> <lan_if_name>", argv[0]);
+  }
 
-  lookup_addrs(wan.if_name);
+  strncpy(wan.if_name, argv[1], sizeof(wan.if_name));
+  strncpy(lan.if_name, argv[2], sizeof(lan.if_name));
+
+  debug("wan: %s, lan:%s", wan.if_name, lan.if_name);
+
+  setup_addrs(&wan);
   wan.bpf_fd = open_bpf(wan.if_name);
 
   ndp_show_loop();
@@ -168,10 +172,9 @@ int open_bpf(char *if_name) {
 }
 
 /*
- * List Ethernet addresses, IPv4 addresses, and IPv4 addresses of given the
- * interface name.
+ * Get Ethernet addresses and IPv6 link local address of WAN interface.
  */
-void lookup_addrs(char *if_name) {
+void setup_addrs(struct wan_if *wan) {
   struct ifaddrs *ifap, *ifa;
   struct sockaddr_dl *sdl;
   struct sockaddr_in6 *sin6;
@@ -184,7 +187,7 @@ void lookup_addrs(char *if_name) {
 
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
-    if (strcmp(ifa->ifa_name, if_name)) {
+    if (strcmp(ifa->ifa_name, wan->if_name)) {
       debug("Skip interface %s", ifa->ifa_name);
       continue;
     }
@@ -196,8 +199,8 @@ void lookup_addrs(char *if_name) {
     case AF_LINK:
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
-        wan.eth_addr = *(struct ether_addr *)LLADDR(sdl);
-        debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa(&wan.eth_addr));
+        wan->eth_addr = *(struct ether_addr *)LLADDR(sdl);
+        debug("%s [Ethernet]: %s", ifa->ifa_name, ether_ntoa(&wan->eth_addr));
         found_dl = 1;
       }
       break;
@@ -209,7 +212,7 @@ void lookup_addrs(char *if_name) {
         // Clear scope id from address
         sin6->sin6_scope_id = ntohs(*(u_int16_t *)&sin6->sin6_addr.s6_addr[2]);
         sin6->sin6_addr.s6_addr[2] = sin6->sin6_addr.s6_addr[3] = 0;
-        wan.sin6 = *sin6;
+        wan->sin6 = *sin6;
         found_in6 = 1;
       }
 
@@ -224,13 +227,13 @@ void lookup_addrs(char *if_name) {
   freeifaddrs(ifap);
 
   if (!found)
-    errorx("Interface not found %s\n", if_name);
+    errorx("Interface not found %s", wan->if_name);
 
   if (!found_dl)
-    errorx("Interface %s has no Ether address\n", if_name);
+    errorx("Interface %s has no Ether address", wan->if_name);
 
   if (!found_in6)
-    errorx("Interface %s hoas no IPv6 link local address\n", if_name);
+    errorx("Interface %s hoas no IPv6 link local address", wan->if_name);
 }
 
 /*
@@ -432,76 +435,6 @@ void nd_ns_process(u_char *p) {
 
 }
 
-/*
- * Does the NDP table of the interface has a possible reachable entry of given
-address?
- * Return 1 if it has entry otherwise 0.
- */
-int lookup_ndp_table(char *if_name, struct in6_addr *addr) {
-  struct in6_nbrinfo nbi;
-
-  char ntop_buf[INET6_ADDRSTRLEN];
-
-  inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf));
-  debug("Lookup NDP table of %s for %s", if_name, ntop_buf);
-
-  if (getnbrinfo(&nbi, addr, lan.if_name) == 0) {
-    debug("NDP state: %d", nbi.state);
-
-    switch (nbi.state) {
-    case ND6_LLINFO_REACHABLE:
-    case ND6_LLINFO_STALE:
-    case ND6_LLINFO_DELAY:
-    case ND6_LLINFO_PROBE:
-      return 1;
-    default:
-      return 0;
-    }
-
-  } else {
-    debug("Failed to get NDP state.");
-    return 0;
-  }
-}
-
-
-void
-print_nbr_state(struct in6_addr *add) {
-  struct in6_nbrinfo nbi;
-  char ntop_buf[INET6_ADDRSTRLEN];
-
-  inet_ntop(AF_INET6, add, ntop_buf, sizeof(ntop_buf));
-  debug("Get neighbor info of %s", ntop_buf);
-
-  if (getnbrinfo(&nbi, add, lan.if_name) == 0) {
-    switch (nbi.state) {
-    case ND6_LLINFO_NOSTATE:
-      debug("NOSTATE");
-      break;
-    case ND6_LLINFO_INCOMPLETE:
-      debug("INCOMPLETE");
-      break;
-    case ND6_LLINFO_REACHABLE:
-      debug("REACHABLE");
-      break;
-    case ND6_LLINFO_STALE:
-      debug("STALE");
-      break;
-    case ND6_LLINFO_DELAY:
-      debug("DELAY");
-      break;
-    case ND6_LLINFO_PROBE:
-      debug("PROBE");
-      break;
-    default:
-      debug("Unknown");
-      break;
-    }
-  } else {
-    debug("Faile to get neighbor info.");
-  }
-}
-
 void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
                 struct in6_addr *target_addr) {
   struct raw_nd_na na;
@@ -630,7 +563,7 @@ __dead void error(const char *fmt, ...) {
   va_list ap;
 
   if (dflag) {
-    (void)fprintf(stderr, "ndp-show: error: ");
+    (void)fprintf(stderr, "%s: error: ", prog_name);
     va_start(ap, fmt);
     (void)vfprintf(stderr, fmt, ap);
     va_end(ap);
@@ -643,7 +576,7 @@ __dead void errorx(const char *fmt, ...) {
   va_list ap;
 
   if (dflag) {
-    (void)fprintf(stderr, "ndp-show: error: ");
+    (void)fprintf(stderr, "%s: error: ", prog_name);
     va_start(ap, fmt);
     (void)vfprintf(stderr, fmt, ap);
     va_end(ap);
@@ -657,7 +590,7 @@ void debug(const char *fmt, ...) {
 
   if (dflag) {
     va_start(ap, fmt);
-    (void)fprintf(stderr, "ndp-show: ");
+    (void)fprintf(stderr, "%s: ", prog_name);
     (void)vfprintf(stderr, fmt, ap);
     va_end(ap);
     (void)fprintf(stderr, "\n");
