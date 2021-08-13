@@ -56,7 +56,7 @@ struct raw_nd_na {
   struct ether_addr opt_lladr;
 } __packed;
 
-char prog_name[] = "nd-reflector";
+char prog_name[] = "ndp-reflector";
 
 void init_wan_if(struct wan_if *);
 int open_bpf(char *);
