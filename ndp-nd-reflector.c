@@ -27,10 +27,6 @@
 #include <string.h>
 #include <unistd.h>
 
-struct lan_if {
-  char if_name[IFNAMSIZ];
-} lan;
-
 struct wan_if {
   char if_name[IFNAMSIZ];     /* if name, e.g. "en0" */
   struct ether_addr eth_addr; /* Ethernet address of this iface */
@@ -39,6 +35,10 @@ struct wan_if {
   u_char *buf;              /* bpf read buffer */
   size_t buf_max;           /* Allocated buffer size */
 } wan;
+
+struct lan_if {
+  char if_name[IFNAMSIZ]; /* if name, e.g. "en1" */
+} lan;
 
 struct raw_nd_ns {
   struct ether_header eth_hdr;
@@ -62,15 +62,15 @@ void setup_addrs(struct wan_if *);
 int open_bpf(char *);
 void ndp_show_loop(void);
 void nd_na_send(struct ether_addr *, struct in6_addr *, struct in6_addr *);
-void error(const char *, ...);
-void errorx(const char *, ...);
+int nd_ns_check(u_char *, size_t);
 void debug(const char *, ...);
 
+// Enable debug mode if set to 1.
 int dflag = 1;
 
 int main(int argc, char *argv[]) {
   if (argc != 3) {
-    errorx("usage: %s <wan_if_name> <lan_if_name>", argv[0]);
+    errx(1, "usage: %s <wan_if_name> <lan_if_name>", argv[0]);
   }
 
   strncpy(wan.if_name, argv[1], sizeof(wan.if_name));
@@ -116,30 +116,30 @@ int open_bpf(char *if_name) {
   u_int dlt;
 
   if ((fd = open("/dev/bpf", O_RDWR)) == -1)
-    error("open /dev/bpf:");
+    err(1, "open /dev/bpf:");
 
   debug("Open BPF file descriptor: %d", fd);
 
   /* Set immediate mode so packets are processed as they arrive. */
   immediate = 1;
   if (ioctl(fd, BIOCIMMEDIATE, &immediate) == -1)
-    error("ioctl(BIOCIMMEDIATE)");
+    err(1, "ioctl(BIOCIMMEDIATE)");
 
   /* Associate a hardware interface to BPF descriptor. */
   strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
   if (ioctl(fd, BIOCSETIF, (caddr_t)&ifr) == -1)
-    error("ioctl(BIOCSETIF)");
+    err(1, "ioctl(BIOCSETIF)");
   debug("Attach BPF descriptor to %s", if_name);
 
   /* Get the BPF buffer length. */
   if (ioctl(fd, BIOCGBLEN, &sz) == -1)
-    error("ioctl(BIOCGBLEN)");
+    err(1, "ioctl(BIOCGBLEN)");
 
   /* Allocate buffer for BPF read */
   wan.buf_max = sz;
   wan.buf = malloc(wan.buf_max);
   if (!wan.buf)
-    errorx("malloc for BFP buffer %zu byte", wan.buf_max);
+    errx(1, "malloc for BFP buffer %zu byte", wan.buf_max);
   debug("Allocate %zu Bytes buffer for BPF descriptor.", wan.buf_max);
 
   /*
@@ -149,21 +149,21 @@ int open_bpf(char *if_name) {
   if (ioctl(fd, BIOCGDLT, (caddr_t)&dlt) == -1)
     err(1, "ioctl(BIOCGDLT)");
   if (dlt != DLT_EN10MB)
-    error("%s is not an Ethernet interface.", if_name);
+    err(1, "%s is not an Ethernet interface.", if_name);
 
   /* Set filter program. */
   if (ioctl(fd, BIOCSETF, (caddr_t)&filter) == -1)
-    error("ioctl(BIOCSETF)");
+    err(1, "ioctl(BIOCSETF)");
 
   /* Set direction filter to ignore outgoing packets. */
   flag = BPF_DIRECTION_OUT;
   if (ioctl(fd, BIOCSDIRFILT, &flag) == -1)
-    error("ioctl(BIOCSDIRFILT)");
+    err(1, "ioctl(BIOCSDIRFILT)");
 
   /* Lock the BPF descriptor to prevent the security issues after dropping
    * privileges. */
   if (ioctl(fd, BIOCLOCK) == -1)
-    error("ioctl(BIOCLOCK)");
+    err(1, "ioctl(BIOCLOCK)");
 
   return fd;
 }
@@ -180,7 +180,7 @@ void setup_addrs(struct wan_if *wan) {
   char ntop_buf[INET6_ADDRSTRLEN];
 
   if (getifaddrs(&ifap) != 0)
-    error("getifaddrs");
+    err(1, "getifaddrs");
 
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
@@ -214,13 +214,13 @@ void setup_addrs(struct wan_if *wan) {
       }
 
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
-        error("inet_ntop");
+        err(1, "inet_ntop");
       debug("%s [IPv6]: %s, scope_id %u", ifa->ifa_name, ntop_buf,
             sin6->sin6_scope_id);
 
       sin6 = (struct sockaddr_in6 *)ifa->ifa_netmask;
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
-        error("inet_ntop");
+        err(1, "inet_ntop");
       debug("%s [IPv6 netmask]: %s, scope_id %u", ifa->ifa_name, ntop_buf,
             sin6->sin6_scope_id);
 
@@ -230,13 +230,13 @@ void setup_addrs(struct wan_if *wan) {
   freeifaddrs(ifap);
 
   if (!found)
-    errorx("Interface not found %s", wan->if_name);
+    errx(1, "Interface not found %s", wan->if_name);
 
   if (!found_dl)
-    errorx("Interface %s has no Ether address", wan->if_name);
+    errx(1, "Interface %s has no Ether address", wan->if_name);
 
   if (!found_in6)
-    errorx("Interface %s hoas no IPv6 link local address", wan->if_name);
+    errx(1, "Interface %s hoas no IPv6 link local address", wan->if_name);
 }
 
 /*
@@ -254,13 +254,13 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   char ntop_buf[INET6_ADDRSTRLEN];
 
   if (!inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf)))
-    error("inet_ntop");
+    err(1, "inet_ntop");
 
   debug("lookup_in6_addr: Does interface %s has IPv6 address %s?", if_name,
         ntop_buf);
 
   if (getifaddrs(&ifap) != 0)
-    error("getifaddrs");
+    err(1, "getifaddrs");
 
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
@@ -308,7 +308,7 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   return found;
 }
 
-static int nd_ns_check(u_char *p, size_t len) {
+int nd_ns_check(u_char *p, size_t len) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
   debug("Receive a packet with captured length %zu", len);
@@ -490,7 +490,7 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
   }
 
   if ((n = write(wan.bpf_fd, &na, sizeof(na))) == -1) {
-    error("write");
+    err(1, "write");
   }
 
   debug("Write %zd of %zd characters.", n, sizeof(na));
@@ -512,7 +512,7 @@ void ndp_show_loop(void) {
     if (ndfs == -1) {
       if (errno == EINTR)
         continue;
-      error("poll");
+      err(1, "poll");
     }
     if (ndfs == 0) {
       debug("poll returns zero.");
@@ -528,7 +528,7 @@ void ndp_show_loop(void) {
       goto again;
     }
     if (length == -1)
-      error("read");
+      err(1, "read");
 
     buf = wan.buf;
     buf_limit = wan.buf + length;
@@ -549,32 +549,9 @@ void ndp_show_loop(void) {
   }
 }
 
-__dead void error(const char *fmt, ...) {
-  va_list ap;
-
-  if (dflag) {
-    (void)fprintf(stderr, "%s: error: ", prog_name);
-    va_start(ap, fmt);
-    (void)vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    (void)fprintf(stderr, ":%s\n", strerror(errno));
-  }
-  exit(1);
-}
-
-__dead void errorx(const char *fmt, ...) {
-  va_list ap;
-
-  if (dflag) {
-    (void)fprintf(stderr, "%s: error: ", prog_name);
-    va_start(ap, fmt);
-    (void)vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    (void)fprintf(stderr, "\n");
-  }
-  exit(1);
-}
-
+/*
+ * Print debug messages to stderr if the debug mode is enabled.
+ */
 void debug(const char *fmt, ...) {
   va_list ap;
 
