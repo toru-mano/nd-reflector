@@ -297,7 +297,7 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
       // address in this interface.
       debug("%s: check interface address", func_name);
       if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, addr)) {
-        debug("%s: found in this interface", func_name);
+        debug("%s: found in this interface %s", func_name, ifa->ifa_name);
         return 1;
       };
 
@@ -310,7 +310,7 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
           break;
       }
       if (i == sizeof(struct in6_addr)) {
-        debug("%s: found in this subnet", func_name);
+        debug("%s: found in this subnet %s", func_name, ifa->ifa_name);
         found = 2;
       };
     }
