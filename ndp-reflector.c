@@ -277,7 +277,7 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
     if (strcmp(ifa->ifa_name, if_name)) {
-      debug("%s: Skip interface %s", func_name, ifa->ifa_name);
+      debug("%s: Skip interface %s, not matched %s", func_name, ifa->ifa_name, if_name);
       continue;
     }
 
@@ -295,14 +295,14 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
       }
 
       // address in this interface.
-      debug("%s: check interface address", func_name);
+      debug("%s: check interface address of %s", func_name, ifa->ifa_name);
       if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, addr)) {
         debug("%s: found in this interface %s", func_name, ifa->ifa_name);
         return 1;
       };
 
       // address in this subnet?
-      debug("%s: check interface subnet", func_name);
+      debug("%s: check interface subnet of %s", func_name, ifa->ifa_name);
       sin6_mask = (struct sockaddr_in6 *)ifa->ifa_netmask;
       for (i = 0; i < sizeof(struct in6_addr); i++) {
         if (((sin6->sin6_addr.s6_addr[i] ^ addr->s6_addr[i]) &
@@ -403,6 +403,7 @@ void print_nd_ns(u_char *p) {
  * Read ND NS field parameters and send NA if required.
  * NA will be send on if all of the following conditions are met:
  * - Ethernet source address matches NS source link-layer address
+ * - IPv6 source address is not unspecified (duplicate address detection)
  * - NS target address is global unicast address
  * - NS target address is not WAN interface address
  * - NS target address is LAN interface address or in LAN /64 subnet
@@ -422,6 +423,13 @@ void nd_ns_process(u_char *p) {
   };
 
   // Decide whether NS packet should be reflected.
+
+  // IPv6 source address is not unspecified (Duplicate address detection)
+  if (IN6_IS_ADDR_UNSPECIFIED(&ns->ip6_hdr.ip6_src)) {
+    debug("%s: IPv6 source address is unspecified. NA will not be send.",
+          func_name);
+    return;
+  }
 
   // NS target address is not unspecified
   if (IN6_IS_ADDR_UNSPECIFIED(&ns->ns_hdr.nd_ns_target)) {
