@@ -182,7 +182,8 @@ void init_wan_if(struct wan_if *wan) {
   char ntop_buf[INET6_ADDRSTRLEN];
   char func_name[] = "init_wan_if";
 
-  debug("%s: Initialize WAN interface address information: %s.", func_name, wan->if_name);
+  debug("%s: Initialize WAN interface address information: %s.", func_name,
+        wan->if_name);
 
   if (getifaddrs(&ifap) != 0)
     err(1, "getifaddrs");
@@ -202,7 +203,8 @@ void init_wan_if(struct wan_if *wan) {
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
         wan->eth_addr = *(struct ether_addr *)LLADDR(sdl);
-        debug("%s: %s [Ethernet]: %s", func_name, ifa->ifa_name, ether_ntoa(&wan->eth_addr));
+        debug("%s: %s [Ethernet]: %s", func_name, ifa->ifa_name,
+              ether_ntoa(&wan->eth_addr));
         found_dl = 1;
       }
       break;
@@ -220,14 +222,14 @@ void init_wan_if(struct wan_if *wan) {
 
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
         err(1, "inet_ntop");
-      debug("%s: %s [IPv6]: %s, scope_id %u", func_name, ifa->ifa_name, ntop_buf,
-            sin6->sin6_scope_id);
+      debug("%s: %s [IPv6]: %s, scope_id %u", func_name, ifa->ifa_name,
+            ntop_buf, sin6->sin6_scope_id);
 
       sin6 = (struct sockaddr_in6 *)ifa->ifa_netmask;
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
         err(1, "inet_ntop");
-      debug("%s: %s [IPv6 netmask]: %s, scope_id %u", func_name, ifa->ifa_name, ntop_buf,
-            sin6->sin6_scope_id);
+      debug("%s: %s [IPv6 netmask]: %s, scope_id %u", func_name, ifa->ifa_name,
+            ntop_buf, sin6->sin6_scope_id);
 
       break;
     }
@@ -244,7 +246,8 @@ void init_wan_if(struct wan_if *wan) {
     errx(1, "Interface %s has no IPv6 link local address", wan->if_name);
 
   inet_ntop(AF_INET6, &wan->sin6.sin6_addr, ntop_buf, sizeof(ntop_buf));
-  debug("%s: Complete initilization: {[Eth]:%s, [IP]:%s}", func_name, ether_ntoa(&wan->eth_addr), ntop_buf);
+  debug("%s: Complete initilization: {[Eth]:%s, [IP]:%s}", func_name,
+        ether_ntoa(&wan->eth_addr), ntop_buf);
 }
 
 /*
@@ -318,7 +321,8 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
 }
 
 /*
- * Check packet format of received packet. If it is valid NS packet then return 1. Otherwise return 0.
+ * Check packet format of received packet. If it is valid NS packet then
+ * return 1. Otherwise return 0.
  */
 int nd_ns_check(u_char *p, size_t len) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
@@ -411,7 +415,9 @@ void nd_ns_process(u_char *p) {
   // ethernet source address == nd_opt source link-layer address
   if (strncmp(ns->eth_hdr.ether_shost, (caddr_t)&ns->opt_lladr,
               ETHER_ADDR_LEN) != 0) {
-    debug("%s: Ethernet source address does not match NS source link-layer address. NA will not be send.", func_name);
+    debug("%s: Ethernet source address does not match NS source link-layer "
+          "address. NA will not be send.",
+          func_name);
     return;
   };
 
@@ -419,36 +425,43 @@ void nd_ns_process(u_char *p) {
 
   // NS target address is not unspecified
   if (IN6_IS_ADDR_UNSPECIFIED(&ns->ns_hdr.nd_ns_target)) {
-    debug("%s: NS target address is unspecified. NA will not be send.", func_name);
+    debug("%s: NS target address is unspecified. NA will not be send.",
+          func_name);
     return;
   }
 
   // NS target address is not multicast
   if (IN6_IS_ADDR_MULTICAST(&ns->ns_hdr.nd_ns_target)) {
-    debug("%s: NS target address is multicast address. NA will not be send.", func_name);
+    debug("%s: NS target address is multicast address. NA will not be send.",
+          func_name);
     return;
   }
 
   // NS target address is not link local
   if (IN6_IS_ADDR_LINKLOCAL(&ns->ns_hdr.nd_ns_target)) {
-    debug("%s: NS target address is link local address. NA will not be send.", func_name);
+    debug("%s: NS target address is link local address. NA will not be send.",
+          func_name);
     return;
   }
 
   // NS target address is not address of WAN if address
   if (lookup_in6_addr(wan.if_name, &ns->ns_hdr.nd_ns_target) == 1) {
-    debug("%s: NS target address is WAN local address. NA will not be send.", func_name);
+    debug("%s: NS target address is WAN local address. NA will not be send.",
+          func_name);
     return;
   };
 
   // NS target address is LAN if address or in LAN subnet /64.
   if (lookup_in6_addr(lan.if_name, &ns->ns_hdr.nd_ns_target) > 0) {
-    debug("%s: NS target address is found in LAN if or subnet. NA will be send", func_name);
+    debug("%s: NS target address is found in LAN if or subnet. NA will be send",
+          func_name);
 
     nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost,
                &ns->ip6_hdr.ip6_src, &ns->ns_hdr.nd_ns_target);
   } else {
-    debug("%s: NS target address is not found in LAN if or subnet. NA will not be send.", func_name);
+    debug("%s: NS target address is not found in LAN if or subnet. NA will not "
+          "be send.",
+          func_name);
   }
 }
 
@@ -527,7 +540,8 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 };
 
 /*
- * Main loop to reflect NDP packet. This function receives NS packets and send NA packets.
+ * Main loop to reflect NDP packet. This function receives NS packets and send
+ * NA packets.
  */
 void ndp_show_loop(void) {
   struct pollfd pfd = {
