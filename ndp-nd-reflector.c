@@ -64,7 +64,7 @@ int nd_ns_check(u_char *, size_t);
 void print_nd_ns(u_char *);
 void nd_ns_process(u_char *);
 void nd_na_send(struct ether_addr *, struct in6_addr *, struct in6_addr *);
-void ndp_show_loop(void);
+void ndp_reflect_loop(void);
 void debug(const char *, ...);
 
 // Enable debug mode if set to 1.
@@ -83,7 +83,7 @@ int main(int argc, char *argv[]) {
   init_wan_if(&wan);
   wan.bpf_fd = open_bpf(wan.if_name);
 
-  ndp_show_loop();
+  ndp_reflect_loop();
   exit(0);
 }
 
@@ -543,7 +543,7 @@ void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
  * Main loop to reflect NDP packet. This function receives NS packets and send
  * NA packets.
  */
-void ndp_show_loop(void) {
+void ndp_reflect_loop(void) {
   struct pollfd pfd = {
       .fd = wan.bpf_fd,
       .events = POLLIN,
