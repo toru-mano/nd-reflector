@@ -8,9 +8,10 @@
 #include <net/if_types.h>
 
 #include <netinet/in.h>
+
+#include <netinet/icmp6.h>
 #include <netinet/if_ether.h>
 #include <netinet/ip6.h>
-#include <netinet/icmp6.h>
 
 #include <arpa/inet.h>
 
@@ -33,10 +34,10 @@ struct lan_if {
 struct wan_if {
   char if_name[IFNAMSIZ];     /* if name, e.g. "en0" */
   struct ether_addr eth_addr; /* Ethernet address of this iface */
-  struct sockaddr_in6 sin6;   /* IPv6 Link Local address without embed scope id*/
-  int bpf_fd;                 /* BPF file descriptor for ND_NS receipt */
-  u_char *buf;                /* bpf read buffer */
-  size_t buf_max;             /* Allocated buffer size */
+  struct sockaddr_in6 sin6; /* IPv6 Link Local address without embed scope id*/
+  int bpf_fd;               /* BPF file descriptor for ND_NS receipt */
+  u_char *buf;              /* bpf read buffer */
+  size_t buf_max;           /* Allocated buffer size */
 } wan;
 
 struct raw_nd_ns {
@@ -245,8 +246,7 @@ void setup_addrs(struct wan_if *wan) {
  * Otherwise 0.
  * When an error occurs, this function returns -1.
  */
-int
-lookup_in6_addr(char *if_name, struct in6_addr *addr) {
+int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   struct ifaddrs *ifap, *ifa;
   struct sockaddr_in6 *sin6, *sin6_mask;
   int found = 0;
@@ -256,8 +256,8 @@ lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   if (!inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf)))
     error("inet_ntop");
 
-  debug("lookup_in6_addr: Does interface %s has IPv6 address %s?", if_name, ntop_buf);
-
+  debug("lookup_in6_addr: Does interface %s has IPv6 address %s?", if_name,
+        ntop_buf);
 
   if (getifaddrs(&ifap) != 0)
     error("getifaddrs");
@@ -293,21 +293,20 @@ lookup_in6_addr(char *if_name, struct in6_addr *addr) {
       debug("check interface subnet");
       sin6_mask = (struct sockaddr_in6 *)ifa->ifa_netmask;
       for (i = 0; i < sizeof(struct in6_addr); i++) {
-        if (((sin6->sin6_addr.s6_addr[i] ^ addr->s6_addr[i]) & sin6_mask->sin6_addr.s6_addr[i]) != 0)
+        if (((sin6->sin6_addr.s6_addr[i] ^ addr->s6_addr[i]) &
+             sin6_mask->sin6_addr.s6_addr[i]) != 0)
           break;
       }
       if (i == sizeof(struct in6_addr)) {
         debug("found in this subnet");
         found = 2;
       };
-
     }
   }
   freeifaddrs(ifap);
 
   return found;
 }
-
 
 static int nd_ns_check(u_char *p, size_t len) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
@@ -389,8 +388,10 @@ void nd_ns_process(u_char *p) {
 
   // do sanity check
   // ether source address == nd_opt source link-layer address
-  if (strncmp(ns->eth_hdr.ether_shost, (caddr_t) &ns->opt_lladr, ETHER_ADDR_LEN) != 0) {
-    debug("(nd_ns_process: ether source does not match NS source link-layer address.");
+  if (strncmp(ns->eth_hdr.ether_shost, (caddr_t)&ns->opt_lladr,
+              ETHER_ADDR_LEN) != 0) {
+    debug("(nd_ns_process: ether source does not match NS source link-layer "
+          "address.");
     return;
   };
 
@@ -417,12 +418,11 @@ void nd_ns_process(u_char *p) {
   if (lookup_in6_addr(lan.if_name, &ns->ns_hdr.nd_ns_target) > 0) {
     debug("nd_ns_process: NS target address is found in LAN if or subnet.");
 
-    nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost, &ns->ip6_hdr.ip6_src,
-             &ns->ns_hdr.nd_ns_target);
+    nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost,
+               &ns->ip6_hdr.ip6_src, &ns->ns_hdr.nd_ns_target);
   } else {
     debug("nd_ns_process: NS target address is not found in LAN if or subnet.");
   }
-
 }
 
 void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
