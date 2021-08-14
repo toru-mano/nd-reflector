@@ -8,3 +8,15 @@
   cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=1 ..
   make
 #+end_src
+
+** source code format
+
+#+begin_src sh
+  clang-format -i *.c
+#+end_src
+
+To generate =.clang-format=.
+
+#+begin_src sh
+  clang-format -style=llvm -dump-config > .clang-format
+#+end_src

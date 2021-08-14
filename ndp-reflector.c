@@ -56,6 +56,7 @@ struct raw_nd_na {
   struct ether_addr opt_lladr;
 } __packed;
 
+__dead void usage(void);
 void init_wan_if_addr(struct wan_if *);
 int open_bpf(char *);
 int check_nd_ns_format(u_char *, size_t);
@@ -66,20 +67,44 @@ void ndp_reflect_loop(void);
 void debug(const char *, ...);
 
 // Enable debug mode if set to 1.
-int debug_mode = 1;
+int debug_mode = 0;
 
-// Enable monitor mode if set to 1.
-int monitor_mode = 1;
+// Enable monitor mode if set to 1. In monitor mode, this program receives ND NS
+// packets, but not send ND NA packets.
+int monitor_mode = 0;
+
+__dead void usage(void) {
+  extern char *__progname;
+
+  fprintf(stderr, "usage: %s [-dm] <wan_if_name> <lan_if_name>\n", __progname);
+  exit(1);
+}
 
 int main(int argc, char *argv[]) {
-  if (argc != 3) {
-    errx(1, "usage: %s <wan_if_name> <lan_if_name>", argv[0]);
+  int ch;
+
+  while ((ch = getopt(argc, argv, "dm")) != -1) {
+    switch (ch) {
+    case 'd':
+      debug_mode = 1;
+      break;
+    case 'm':
+      monitor_mode = 1;
+      break;
+    default:
+      usage();
+    }
   }
+  argc -= optind;
+  argv += optind;
 
-  strncpy(wan.if_name, argv[1], sizeof(wan.if_name));
-  strncpy(lan.if_name, argv[2], sizeof(lan.if_name));
+  if (argc != 2)
+    usage();
 
-  debug("wan: %s, lan:%s", wan.if_name, lan.if_name);
+  strncpy(wan.if_name, argv[0], sizeof(wan.if_name));
+  strncpy(lan.if_name, argv[1], sizeof(lan.if_name));
+
+  debug("Start with wan_if: %s, lan_if:%s", wan.if_name, lan.if_name);
 
   init_wan_if_addr(&wan);
   wan.bpf_fd = open_bpf(wan.if_name);
@@ -313,8 +338,9 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   }
   freeifaddrs(ifap);
 
-  debug("%s: Not found address %s in interface of %s", __func__, ntop_buf,
-        if_name);
+  if (found == 0)
+    debug("%s: Not found address %s in interface of %s", __func__, ntop_buf,
+          if_name);
 
   return found;
 }
