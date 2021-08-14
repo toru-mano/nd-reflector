@@ -56,9 +56,7 @@ struct raw_nd_na {
   struct ether_addr opt_lladr;
 } __packed;
 
-char prog_name[] = "ndp-reflector";
-
-void init_wan_if(struct wan_if *);
+void init_wan_if_addr(struct wan_if *);
 int open_bpf(char *);
 int nd_ns_check(u_char *, size_t);
 void print_nd_ns(u_char *);
@@ -68,7 +66,10 @@ void ndp_reflect_loop(void);
 void debug(const char *, ...);
 
 // Enable debug mode if set to 1.
-int dflag = 1;
+int debug_mode = 1;
+
+// Enable monitor mode if set to 1.
+int monitor_mode = 1;
 
 int main(int argc, char *argv[]) {
   if (argc != 3) {
@@ -80,7 +81,7 @@ int main(int argc, char *argv[]) {
 
   debug("wan: %s, lan:%s", wan.if_name, lan.if_name);
 
-  init_wan_if(&wan);
+  init_wan_if_addr(&wan);
   wan.bpf_fd = open_bpf(wan.if_name);
 
   ndp_reflect_loop();
@@ -173,16 +174,15 @@ int open_bpf(char *if_name) {
 /*
  * Initialize WAN interface's Ethernet address and IPv6 link local address.
  */
-void init_wan_if(struct wan_if *wan) {
+void init_wan_if_addr(struct wan_if *wan) {
   struct ifaddrs *ifap, *ifa;
   struct sockaddr_dl *sdl;
   struct sockaddr_in6 *sin6;
 
   int found = 0, found_dl = 0, found_in6 = 0;
   char ntop_buf[INET6_ADDRSTRLEN];
-  char func_name[] = "init_wan_if";
 
-  debug("%s: Initialize WAN interface address information: %s.", func_name,
+  debug("%s: Initialize WAN interface address information: %s.", __func__,
         wan->if_name);
 
   if (getifaddrs(&ifap) != 0)
@@ -191,7 +191,6 @@ void init_wan_if(struct wan_if *wan) {
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
     if (strcmp(ifa->ifa_name, wan->if_name)) {
-      debug("%s: Skip interface %s", func_name, ifa->ifa_name);
       continue;
     }
 
@@ -203,7 +202,7 @@ void init_wan_if(struct wan_if *wan) {
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
         wan->eth_addr = *(struct ether_addr *)LLADDR(sdl);
-        debug("%s: %s [Ethernet]: %s", func_name, ifa->ifa_name,
+        debug("%s: %s [Ethernet]: %s", __func__, ifa->ifa_name,
               ether_ntoa(&wan->eth_addr));
         found_dl = 1;
       }
@@ -222,13 +221,13 @@ void init_wan_if(struct wan_if *wan) {
 
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
         err(1, "inet_ntop");
-      debug("%s: %s [IPv6]: %s, scope_id %u", func_name, ifa->ifa_name,
+      debug("%s: %s [IPv6]: %s, scope_id %u", __func__, ifa->ifa_name,
             ntop_buf, sin6->sin6_scope_id);
 
       sin6 = (struct sockaddr_in6 *)ifa->ifa_netmask;
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
         err(1, "inet_ntop");
-      debug("%s: %s [IPv6 netmask]: %s, scope_id %u", func_name, ifa->ifa_name,
+      debug("%s: %s [IPv6 netmask]: %s, scope_id %u", __func__, ifa->ifa_name,
             ntop_buf, sin6->sin6_scope_id);
 
       break;
@@ -246,7 +245,7 @@ void init_wan_if(struct wan_if *wan) {
     errx(1, "Interface %s has no IPv6 link local address", wan->if_name);
 
   inet_ntop(AF_INET6, &wan->sin6.sin6_addr, ntop_buf, sizeof(ntop_buf));
-  debug("%s: Complete initilization: {[Eth]:%s, [IP]:%s}", func_name,
+  debug("%s: Complete initilization: {[Eth]:%s, [IP]:%s}", __func__,
         ether_ntoa(&wan->eth_addr), ntop_buf);
 }
 
@@ -263,12 +262,11 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   int found = 0;
   size_t i;
   char ntop_buf[INET6_ADDRSTRLEN];
-  char func_name[] = "lookup_in6_addr";
 
   if (!inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf)))
     err(1, "inet_ntop");
 
-  debug("%s: Does interface %s has IPv6 address %s?", func_name, if_name,
+  debug("%s: Does interface %s has IPv6 address %s?", __func__, if_name,
         ntop_buf);
 
   if (getifaddrs(&ifap) != 0)
@@ -277,7 +275,6 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
     if (strcmp(ifa->ifa_name, if_name)) {
-      debug("%s: Skip interface %s, not matched %s", func_name, ifa->ifa_name, if_name);
       continue;
     }
 
@@ -295,14 +292,12 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
       }
 
       // address in this interface.
-      debug("%s: check interface address of %s", func_name, ifa->ifa_name);
       if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, addr)) {
-        debug("%s: found in this interface %s", func_name, ifa->ifa_name);
+        debug("%s: Found in interface address of %s", __func__, ifa->ifa_name);
         return 1;
       };
 
       // address in this subnet?
-      debug("%s: check interface subnet of %s", func_name, ifa->ifa_name);
       sin6_mask = (struct sockaddr_in6 *)ifa->ifa_netmask;
       for (i = 0; i < sizeof(struct in6_addr); i++) {
         if (((sin6->sin6_addr.s6_addr[i] ^ addr->s6_addr[i]) &
@@ -310,12 +305,15 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
           break;
       }
       if (i == sizeof(struct in6_addr)) {
-        debug("%s: found in this subnet %s", func_name, ifa->ifa_name);
+        debug("%s: Found in interface subnet of %s", __func__, ifa->ifa_name);
+
         found = 2;
       };
     }
   }
   freeifaddrs(ifap);
+
+  debug("%s: Not found address %s in interface of %s", __func__, ntop_buf, if_name);
 
   return found;
 }
@@ -410,7 +408,6 @@ void print_nd_ns(u_char *p) {
  */
 void nd_ns_process(u_char *p) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
-  char func_name[] = "nd_ns_process";
 
   // do sanity check
   // ethernet source address == nd_opt source link-layer address
@@ -418,7 +415,7 @@ void nd_ns_process(u_char *p) {
               ETHER_ADDR_LEN) != 0) {
     debug("%s: Ethernet source address does not match NS source link-layer "
           "address. NA will not be send.",
-          func_name);
+          __func__);
     return;
   };
 
@@ -427,49 +424,49 @@ void nd_ns_process(u_char *p) {
   // IPv6 source address is not unspecified (Duplicate address detection)
   if (IN6_IS_ADDR_UNSPECIFIED(&ns->ip6_hdr.ip6_src)) {
     debug("%s: IPv6 source address is unspecified. NA will not be send.",
-          func_name);
+          __func__);
     return;
   }
 
   // NS target address is not unspecified
   if (IN6_IS_ADDR_UNSPECIFIED(&ns->ns_hdr.nd_ns_target)) {
     debug("%s: NS target address is unspecified. NA will not be send.",
-          func_name);
+          __func__);
     return;
   }
 
   // NS target address is not multicast
   if (IN6_IS_ADDR_MULTICAST(&ns->ns_hdr.nd_ns_target)) {
     debug("%s: NS target address is multicast address. NA will not be send.",
-          func_name);
+          __func__);
     return;
   }
 
   // NS target address is not link local
   if (IN6_IS_ADDR_LINKLOCAL(&ns->ns_hdr.nd_ns_target)) {
     debug("%s: NS target address is link local address. NA will not be send.",
-          func_name);
+          __func__);
     return;
   }
 
   // NS target address is not address of WAN if address
   if (lookup_in6_addr(wan.if_name, &ns->ns_hdr.nd_ns_target) == 1) {
     debug("%s: NS target address is WAN local address. NA will not be send.",
-          func_name);
+          __func__);
     return;
   };
 
   // NS target address is LAN if address or in LAN subnet /64.
   if (lookup_in6_addr(lan.if_name, &ns->ns_hdr.nd_ns_target) > 0) {
     debug("%s: NS target address is found in LAN if or subnet. NA will be send",
-          func_name);
+          __func__);
 
     nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost,
                &ns->ip6_hdr.ip6_src, &ns->ns_hdr.nd_ns_target);
   } else {
     debug("%s: NS target address is not found in LAN if or subnet. NA will not "
           "be send.",
-          func_name);
+          __func__);
   }
 }
 
@@ -608,11 +605,13 @@ void ndp_reflect_loop(void) {
  * Print debug messages to stderr if the debug mode is enabled.
  */
 void debug(const char *fmt, ...) {
+  extern char *__progname;
+
   va_list ap;
 
-  if (dflag) {
+  if (debug_mode) {
     va_start(ap, fmt);
-    (void)fprintf(stderr, "%s: ", prog_name);
+    (void)fprintf(stderr, "%s: ", __progname);
     (void)vfprintf(stderr, fmt, ap);
     va_end(ap);
     (void)fprintf(stderr, "\n");
