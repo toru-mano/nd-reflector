@@ -143,8 +143,6 @@ int main(int argc, char *argv[]) {
   exit(EXIT_SUCCESS);
 }
 
-
-
 static struct bpf_insn insns[] = {
     /* Make sure this is an IPv6 packet. */
     BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
