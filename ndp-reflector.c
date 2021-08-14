@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@ struct raw_nd_na {
 } __packed;
 
 __dead void usage(void);
+void terminate(int);
 void init_wan_if_addr(struct wan_if *);
 int open_bpf(char *);
 int check_nd_ns_format(u_char *, size_t);
@@ -76,6 +78,8 @@ int monitor_mode = 0;
 
 int verbose_mode = 0;
 
+volatile sig_atomic_t quit = 0;
+
 __dead void usage(void) {
   extern char *__progname;
 
@@ -83,12 +87,17 @@ __dead void usage(void) {
   exit(1);
 }
 
+void terminate(__attribute__((unused)) int sig) { quit = 1; }
+
 int main(int argc, char *argv[]) {
   extern char *__progname;
   extern int optind;
   int ch;
 
   openlog(__progname, LOG_PID, LOG_DAEMON);
+
+  signal(SIGTERM, terminate);
+  signal(SIGINT, terminate);
 
   while ((ch = getopt(argc, argv, "dmv")) != -1) {
     switch (ch) {
@@ -120,8 +129,17 @@ int main(int argc, char *argv[]) {
   wan.bpf_fd = open_bpf(wan.if_name);
 
   ndp_reflect_loop();
-  exit(0);
+
+  close(wan.bpf_fd);
+
+  log_info("terminated");
+
+  closelog();
+
+  exit(EXIT_SUCCESS);
 }
+
+
 
 static struct bpf_insn insns[] = {
     /* Make sure this is an IPv6 packet. */
@@ -280,7 +298,7 @@ void init_wan_if_addr(struct wan_if *wan) {
     errorx("Interface %s has no IPv6 link local address", wan->if_name);
 
   inet_ntop(AF_INET6, &wan->sin6.sin6_addr, ntop_buf, sizeof(ntop_buf));
-  log_info("%s: complete wan_if address information: {[Eth]:%s, [IP]:%s}",
+  log_info("%s: complete wan_if address information: {Eth = %s, IP = %s}",
            __func__, ether_ntoa(&wan->eth_addr), ntop_buf);
 }
 
@@ -603,7 +621,7 @@ void ndp_reflect_loop(void) {
   u_char *buf, *buf_limit;
   struct bpf_hdr *bh;
 
-  while (1) {
+  while (!quit) {
 
     ndfs = poll(&pfd, 1, timeout);
     if (ndfs == -1) {
@@ -706,7 +724,7 @@ __dead void error(const char *fmt, ...) {
   vlog(LOG_ERR, fmt, ap);
   verrorc(errno, fmt, ap);
   va_end(ap);
-  exit(1);
+  exit(EXIT_FAILURE);
 }
 
 __dead void errorx(const char *fmt, ...) {
@@ -715,5 +733,5 @@ __dead void errorx(const char *fmt, ...) {
   vlog(LOG_ERR, fmt, ap);
   verrorc(0, fmt, ap);
   va_end(ap);
-  exit(1);
+  exit(EXIT_FAILURE);
 }
