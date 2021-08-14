@@ -58,10 +58,10 @@ struct raw_nd_na {
 
 void init_wan_if_addr(struct wan_if *);
 int open_bpf(char *);
-int nd_ns_check(u_char *, size_t);
+int check_nd_ns_format(u_char *, size_t);
 void print_nd_ns(u_char *);
-void nd_ns_process(u_char *);
-void nd_na_send(struct ether_addr *, struct in6_addr *, struct in6_addr *);
+void process_nd_ns(u_char *);
+void send_nd_na(struct ether_addr *, struct in6_addr *, struct in6_addr *);
 void ndp_reflect_loop(void);
 void debug(const char *, ...);
 
@@ -221,8 +221,8 @@ void init_wan_if_addr(struct wan_if *wan) {
 
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
         err(1, "inet_ntop");
-      debug("%s: %s [IPv6]: %s, scope_id %u", __func__, ifa->ifa_name,
-            ntop_buf, sin6->sin6_scope_id);
+      debug("%s: %s [IPv6]: %s, scope_id %u", __func__, ifa->ifa_name, ntop_buf,
+            sin6->sin6_scope_id);
 
       sin6 = (struct sockaddr_in6 *)ifa->ifa_netmask;
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
@@ -313,7 +313,8 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   }
   freeifaddrs(ifap);
 
-  debug("%s: Not found address %s in interface of %s", __func__, ntop_buf, if_name);
+  debug("%s: Not found address %s in interface of %s", __func__, ntop_buf,
+        if_name);
 
   return found;
 }
@@ -322,7 +323,7 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
  * Check packet format of received packet. If it is valid NS packet then
  * return 1. Otherwise return 0.
  */
-int nd_ns_check(u_char *p, size_t len) {
+int check_nd_ns_format(u_char *p, size_t len) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
   debug("Receive a packet with captured length %zu", len);
@@ -406,7 +407,7 @@ void print_nd_ns(u_char *p) {
  * - NS target address is not WAN interface address
  * - NS target address is LAN interface address or in LAN /64 subnet
  */
-void nd_ns_process(u_char *p) {
+void process_nd_ns(u_char *p) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
   // do sanity check
@@ -461,8 +462,9 @@ void nd_ns_process(u_char *p) {
     debug("%s: NS target address is found in LAN if or subnet. NA will be send",
           __func__);
 
-    nd_na_send((struct ether_addr *)ns->eth_hdr.ether_shost,
-               &ns->ip6_hdr.ip6_src, &ns->ns_hdr.nd_ns_target);
+    if (monitor_mode == 0)
+      send_nd_na((struct ether_addr *)ns->eth_hdr.ether_shost,
+                 &ns->ip6_hdr.ip6_src, &ns->ns_hdr.nd_ns_target);
   } else {
     debug("%s: NS target address is not found in LAN if or subnet. NA will not "
           "be send.",
@@ -473,7 +475,7 @@ void nd_ns_process(u_char *p) {
 /*
  * Assemble raw NA packet and send it via BPF descriptor.
  */
-void nd_na_send(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
+void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
                 struct in6_addr *target_addr) {
   struct raw_nd_na na;
   ssize_t n;
@@ -591,9 +593,9 @@ void ndp_reflect_loop(void) {
       debug("BPF header length: %u, captured length: %lu", bh->bh_hdrlen,
             bh->bh_caplen);
 
-      if (nd_ns_check(buf + bh->bh_hdrlen, bh->bh_caplen)) {
+      if (check_nd_ns_format(buf + bh->bh_hdrlen, bh->bh_caplen)) {
         print_nd_ns(buf + bh->bh_hdrlen);
-        nd_ns_process(buf + bh->bh_hdrlen);
+        process_nd_ns(buf + bh->bh_hdrlen);
       }
 
       buf += BPF_WORDALIGN(bh->bh_hdrlen + bh->bh_caplen);
