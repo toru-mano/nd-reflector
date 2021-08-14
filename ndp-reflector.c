@@ -1,5 +1,4 @@
 #include <sys/ioctl.h>
-#include <sys/socket.h>
 #include <sys/types.h>
 
 #include <net/bpf.h>
@@ -21,10 +20,10 @@
 #include <ifaddrs.h>
 #include <poll.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <unistd.h>
 
 struct wan_if {
@@ -64,32 +63,43 @@ void print_nd_ns(u_char *);
 void process_nd_ns(u_char *);
 void send_nd_na(struct ether_addr *, struct in6_addr *, struct in6_addr *);
 void ndp_reflect_loop(void);
-void debug(const char *, ...);
+void log_info(const char *, ...);
+void log_debug(const char *, ...);
+__dead void error(const char *, ...);
+__dead void errorx(const char *, ...);
 
-// Enable debug mode if set to 1.
-int debug_mode = 0;
+int daemon_mode = 1;
 
 // Enable monitor mode if set to 1. In monitor mode, this program receives ND NS
 // packets, but not send ND NA packets.
 int monitor_mode = 0;
 
+int verbose_mode = 0;
+
 __dead void usage(void) {
   extern char *__progname;
 
-  fprintf(stderr, "usage: %s [-dm] <wan_if_name> <lan_if_name>\n", __progname);
+  fprintf(stderr, "usage: %s [-dmv] <wan_if_name> <lan_if_name>\n", __progname);
   exit(1);
 }
 
 int main(int argc, char *argv[]) {
+  extern char *__progname;
+  extern int optind;
   int ch;
 
-  while ((ch = getopt(argc, argv, "dm")) != -1) {
+  openlog(__progname, LOG_PID, LOG_DAEMON);
+
+  while ((ch = getopt(argc, argv, "dmv")) != -1) {
     switch (ch) {
     case 'd':
-      debug_mode = 1;
+      daemon_mode = 0;
       break;
     case 'm':
       monitor_mode = 1;
+      break;
+    case 'v':
+      verbose_mode = 1;
       break;
     default:
       usage();
@@ -104,7 +114,7 @@ int main(int argc, char *argv[]) {
   strncpy(wan.if_name, argv[0], sizeof(wan.if_name));
   strncpy(lan.if_name, argv[1], sizeof(lan.if_name));
 
-  debug("Start with wan_if: %s, lan_if:%s", wan.if_name, lan.if_name);
+  log_info("started with wan_if: %s, lan_if:%s", wan.if_name, lan.if_name);
 
   init_wan_if_addr(&wan);
   wan.bpf_fd = open_bpf(wan.if_name);
@@ -144,54 +154,54 @@ int open_bpf(char *if_name) {
   u_int dlt;
 
   if ((fd = open("/dev/bpf", O_RDWR)) == -1)
-    err(1, "open /dev/bpf:");
+    error("open /dev/bpf:");
 
-  debug("Open BPF file descriptor: %d", fd);
+  log_debug("Open BPF file descriptor: %d", fd);
 
   /* Set immediate mode so packets are processed as they arrive. */
   immediate = 1;
   if (ioctl(fd, BIOCIMMEDIATE, &immediate) == -1)
-    err(1, "ioctl(BIOCIMMEDIATE)");
+    error("ioctl(BIOCIMMEDIATE)");
 
   /* Associate a hardware interface to BPF descriptor. */
   strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
   if (ioctl(fd, BIOCSETIF, (caddr_t)&ifr) == -1)
-    err(1, "ioctl(BIOCSETIF)");
-  debug("Attach BPF descriptor to %s", if_name);
+    error("ioctl(BIOCSETIF)");
+  log_debug("Attach BPF descriptor to %s", if_name);
 
   /* Get the BPF buffer length. */
   if (ioctl(fd, BIOCGBLEN, &sz) == -1)
-    err(1, "ioctl(BIOCGBLEN)");
+    error("ioctl(BIOCGBLEN)");
 
   /* Allocate buffer for BPF read */
   wan.buf_max = sz;
   wan.buf = malloc(wan.buf_max);
   if (!wan.buf)
-    errx(1, "malloc for BFP buffer %zu byte", wan.buf_max);
-  debug("Allocate %zu Bytes buffer for BPF descriptor.", wan.buf_max);
+    errorx("malloc for BFP buffer %zu byte", wan.buf_max);
+  log_debug("Allocate %zu Bytes buffer for BPF descriptor.", wan.buf_max);
 
   /*
    * Check that the data link layer is an Ethernet; this code won't work with
    * anything else.
    */
   if (ioctl(fd, BIOCGDLT, (caddr_t)&dlt) == -1)
-    err(1, "ioctl(BIOCGDLT)");
+    error("ioctl(BIOCGDLT)");
   if (dlt != DLT_EN10MB)
-    err(1, "%s is not an Ethernet interface.", if_name);
+    error("%s is not an Ethernet interface.", if_name);
 
   /* Set filter program. */
   if (ioctl(fd, BIOCSETF, (caddr_t)&filter) == -1)
-    err(1, "ioctl(BIOCSETF)");
+    error("ioctl(BIOCSETF)");
 
   /* Set direction filter to ignore outgoing packets. */
   flag = BPF_DIRECTION_OUT;
   if (ioctl(fd, BIOCSDIRFILT, &flag) == -1)
-    err(1, "ioctl(BIOCSDIRFILT)");
+    error("ioctl(BIOCSDIRFILT)");
 
   /* Lock the BPF descriptor to prevent the security issues after dropping
    * privileges. */
   if (ioctl(fd, BIOCLOCK) == -1)
-    err(1, "ioctl(BIOCLOCK)");
+    error("ioctl(BIOCLOCK)");
 
   return fd;
 }
@@ -207,11 +217,11 @@ void init_wan_if_addr(struct wan_if *wan) {
   int found = 0, found_dl = 0, found_in6 = 0;
   char ntop_buf[INET6_ADDRSTRLEN];
 
-  debug("%s: Initialize WAN interface address information: %s.", __func__,
-        wan->if_name);
+  log_debug("%s: initialize wan_if address information: %s.", __func__,
+            wan->if_name);
 
   if (getifaddrs(&ifap) != 0)
-    err(1, "getifaddrs");
+    error("getifaddrs");
 
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
@@ -227,8 +237,8 @@ void init_wan_if_addr(struct wan_if *wan) {
       sdl = (struct sockaddr_dl *)ifa->ifa_addr;
       if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
         wan->eth_addr = *(struct ether_addr *)LLADDR(sdl);
-        debug("%s: %s [Ethernet]: %s", __func__, ifa->ifa_name,
-              ether_ntoa(&wan->eth_addr));
+        log_debug("%s: %s [Ethernet]: %s", __func__, ifa->ifa_name,
+                  ether_ntoa(&wan->eth_addr));
         found_dl = 1;
       }
       break;
@@ -245,15 +255,15 @@ void init_wan_if_addr(struct wan_if *wan) {
       }
 
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
-        err(1, "inet_ntop");
-      debug("%s: %s [IPv6]: %s, scope_id %u", __func__, ifa->ifa_name, ntop_buf,
-            sin6->sin6_scope_id);
+        error("inet_ntop");
+      log_debug("%s: %s [IPv6]: %s, scope_id %u", __func__, ifa->ifa_name,
+                ntop_buf, sin6->sin6_scope_id);
 
       sin6 = (struct sockaddr_in6 *)ifa->ifa_netmask;
       if (!inet_ntop(AF_INET6, &sin6->sin6_addr, ntop_buf, sizeof(ntop_buf)))
-        err(1, "inet_ntop");
-      debug("%s: %s [IPv6 netmask]: %s, scope_id %u", __func__, ifa->ifa_name,
-            ntop_buf, sin6->sin6_scope_id);
+        error("inet_ntop");
+      log_debug("%s: %s [IPv6 netmask]: %s, scope_id %u", __func__,
+                ifa->ifa_name, ntop_buf, sin6->sin6_scope_id);
 
       break;
     }
@@ -261,17 +271,17 @@ void init_wan_if_addr(struct wan_if *wan) {
   freeifaddrs(ifap);
 
   if (!found)
-    errx(1, "Interface not found %s", wan->if_name);
+    errorx("Interface not found %s", wan->if_name);
 
   if (!found_dl)
-    errx(1, "Interface %s has no Ether address", wan->if_name);
+    errorx("Interface %s has no Ether address", wan->if_name);
 
   if (!found_in6)
-    errx(1, "Interface %s has no IPv6 link local address", wan->if_name);
+    errorx("Interface %s has no IPv6 link local address", wan->if_name);
 
   inet_ntop(AF_INET6, &wan->sin6.sin6_addr, ntop_buf, sizeof(ntop_buf));
-  debug("%s: Complete initilization: {[Eth]:%s, [IP]:%s}", __func__,
-        ether_ntoa(&wan->eth_addr), ntop_buf);
+  log_info("%s: complete wan_if address information: {[Eth]:%s, [IP]:%s}",
+           __func__, ether_ntoa(&wan->eth_addr), ntop_buf);
 }
 
 /*
@@ -289,13 +299,13 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   char ntop_buf[INET6_ADDRSTRLEN];
 
   if (!inet_ntop(AF_INET6, addr, ntop_buf, sizeof(ntop_buf)))
-    err(1, "inet_ntop");
+    error("inet_ntop");
 
-  debug("%s: Does interface %s has IPv6 address %s?", __func__, if_name,
-        ntop_buf);
+  log_debug("%s: does interface %s has IPv6 address %s?", __func__, if_name,
+            ntop_buf);
 
   if (getifaddrs(&ifap) != 0)
-    err(1, "getifaddrs");
+    error("getifaddrs");
 
   for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
@@ -318,7 +328,8 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
 
       // address in this interface.
       if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, addr)) {
-        debug("%s: Found in interface address of %s", __func__, ifa->ifa_name);
+        log_debug("%s: found in interface address of %s", __func__,
+                  ifa->ifa_name);
         return 1;
       };
 
@@ -330,7 +341,8 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
           break;
       }
       if (i == sizeof(struct in6_addr)) {
-        debug("%s: Found in interface subnet of %s", __func__, ifa->ifa_name);
+        log_debug("%s: found in interface subnet of %s", __func__,
+                  ifa->ifa_name);
 
         found = 2;
       };
@@ -339,8 +351,8 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
   freeifaddrs(ifap);
 
   if (found == 0)
-    debug("%s: Not found address %s in interface of %s", __func__, ntop_buf,
-          if_name);
+    log_debug("%s: not found address %s in interface of %s", __func__, ntop_buf,
+              if_name);
 
   return found;
 }
@@ -352,32 +364,32 @@ int lookup_in6_addr(char *if_name, struct in6_addr *addr) {
 int check_nd_ns_format(u_char *p, size_t len) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
-  debug("Receive a packet with captured length %zu", len);
+  log_debug("Receive a packet with captured length %zu", len);
 
   if (len < sizeof(struct raw_nd_ns)) {
-    debug("Truncated packet or NS with unspecified source IPv6 address.");
+    log_debug("Truncated packet or NS with unspecified source IPv6 address.");
     return 0;
   }
 
   if (ntohs(ns->eth_hdr.ether_type) != ETHERTYPE_IPV6) {
-    debug("Not an IPv6 packet.");
+    log_debug("Not an IPv6 packet.");
     return 0;
   }
 
   if (len != sizeof(struct ether_header) + sizeof(struct ip6_hdr) +
                  ntohs(ns->ip6_hdr.ip6_plen)) {
-    debug("IPv6 payload length %u missmatches captured length.",
-          ntohs(ns->ip6_hdr.ip6_plen));
+    log_debug("IPv6 payload length %u missmatches captured length.",
+              ntohs(ns->ip6_hdr.ip6_plen));
     return 0;
   }
 
   if (ns->ip6_hdr.ip6_nxt != IPPROTO_ICMPV6) {
-    debug("Not an ICMPv6 packet.");
+    log_debug("Not an ICMPv6 packet.");
     return 0;
   }
 
   if (ns->ns_hdr.nd_ns_type != ND_NEIGHBOR_SOLICIT) {
-    debug("Not a ND_NS packet.");
+    log_debug("Not a ND_NS packet.");
     return 0;
   }
 
@@ -386,11 +398,11 @@ int check_nd_ns_format(u_char *p, size_t len) {
   if (len == sizeof(struct raw_nd_ns)) {
     return ns->opt_hdr.nd_opt_type == ND_OPT_SOURCE_LINKADDR &&
            ns->opt_hdr.nd_opt_len == 1;
-    debug("Unsupported ND opton, type: %u, len %u", ns->opt_hdr.nd_opt_type,
-          ns->opt_hdr.nd_opt_len);
+    log_debug("Unsupported ND opton, type: %u, len %u", ns->opt_hdr.nd_opt_type,
+              ns->opt_hdr.nd_opt_len);
   }
 
-  debug("More than one ND optoins.");
+  log_debug("More than one ND optoins.");
 
   return 0;
 }
@@ -399,28 +411,28 @@ void print_nd_ns(u_char *p) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
   char ntop_buf[INET6_ADDRSTRLEN];
 
-  debug("[Dst MAC]: %s",
-        ether_ntoa((struct ether_addr *)&ns->eth_hdr.ether_dhost));
-  debug("[Src MAC]: %s",
-        ether_ntoa((struct ether_addr *)&ns->eth_hdr.ether_shost));
+  log_debug("[Dst MAC]: %s",
+            ether_ntoa((struct ether_addr *)&ns->eth_hdr.ether_dhost));
+  log_debug("[Src MAC]: %s",
+            ether_ntoa((struct ether_addr *)&ns->eth_hdr.ether_shost));
 
   inet_ntop(AF_INET6, &ns->ip6_hdr.ip6_src, ntop_buf, sizeof(ntop_buf));
-  debug("[Src IPv6]: %s", ntop_buf);
+  log_debug("[Src IPv6]: %s", ntop_buf);
 
   inet_ntop(AF_INET6, &ns->ip6_hdr.ip6_dst, ntop_buf, sizeof(ntop_buf));
-  debug("[Dst IPv6]: %s", ntop_buf);
+  log_debug("[Dst IPv6]: %s", ntop_buf);
 
-  debug("[ICMPv6]: type: %u, code: %u", ns->ns_hdr.nd_ns_type,
-        ns->ns_hdr.nd_ns_code);
+  log_debug("[ICMPv6]: type: %u, code: %u", ns->ns_hdr.nd_ns_type,
+            ns->ns_hdr.nd_ns_code);
 
   inet_ntop(AF_INET6, &ns->ns_hdr.nd_ns_target, ntop_buf, sizeof(ntop_buf));
-  debug("[ND_NS]: target: %s", ntop_buf);
+  log_debug("[ND_NS]: target: %s", ntop_buf);
 
   // ND_NS may have a ND optoin
   if (ns->ip6_hdr.ip6_plen > sizeof(struct nd_neighbor_solicit)) {
-    debug("[ND_OPT]: type: %d, len: %d", ns->opt_hdr.nd_opt_type,
-          ns->opt_hdr.nd_opt_len);
-    debug("[ND_MAC]: %s", ether_ntoa(&ns->opt_lladr));
+    log_debug("[ND_OPT]: type: %d, len: %d", ns->opt_hdr.nd_opt_type,
+              ns->opt_hdr.nd_opt_len);
+    log_debug("[ND_MAC]: %s", ether_ntoa(&ns->opt_lladr));
   }
 }
 
@@ -435,66 +447,73 @@ void print_nd_ns(u_char *p) {
  */
 void process_nd_ns(u_char *p) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
+  struct in6_addr *ip6_src = &ns->ip6_hdr.ip6_src;
+  struct in6_addr *nd_ns_target = &ns->ns_hdr.nd_ns_target;
+  char ntop_buf[INET6_ADDRSTRLEN], ntop_buf2[INET6_ADDRSTRLEN];
 
   // do sanity check
   // ethernet source address == nd_opt source link-layer address
   if (strncmp(ns->eth_hdr.ether_shost, (caddr_t)&ns->opt_lladr,
               ETHER_ADDR_LEN) != 0) {
-    debug("%s: Ethernet source address does not match NS source link-layer "
-          "address. NA will not be send.",
-          __func__);
+    log_debug("%s: Ethernet source address does not match NS source link-layer "
+              "address.",
+              __func__);
     return;
   };
 
   // Decide whether NS packet should be reflected.
 
   // IPv6 source address is not unspecified (Duplicate address detection)
-  if (IN6_IS_ADDR_UNSPECIFIED(&ns->ip6_hdr.ip6_src)) {
-    debug("%s: IPv6 source address is unspecified. NA will not be send.",
-          __func__);
+  if (IN6_IS_ADDR_UNSPECIFIED(ip6_src)) {
+    log_debug("%s: IPv6 source address is unspecified.", __func__);
     return;
   }
 
   // NS target address is not unspecified
-  if (IN6_IS_ADDR_UNSPECIFIED(&ns->ns_hdr.nd_ns_target)) {
-    debug("%s: NS target address is unspecified. NA will not be send.",
-          __func__);
+  if (IN6_IS_ADDR_UNSPECIFIED(nd_ns_target)) {
+    log_debug("%s: NS target address is unspecified.", __func__);
     return;
   }
 
   // NS target address is not multicast
-  if (IN6_IS_ADDR_MULTICAST(&ns->ns_hdr.nd_ns_target)) {
-    debug("%s: NS target address is multicast address. NA will not be send.",
-          __func__);
+  if (IN6_IS_ADDR_MULTICAST(nd_ns_target)) {
+    log_debug("%s: NS target address is multicast address.", __func__);
     return;
   }
 
   // NS target address is not link local
-  if (IN6_IS_ADDR_LINKLOCAL(&ns->ns_hdr.nd_ns_target)) {
-    debug("%s: NS target address is link local address. NA will not be send.",
-          __func__);
+  if (IN6_IS_ADDR_LINKLOCAL(nd_ns_target)) {
+    log_debug("%s: NS target address is link local address.", __func__);
     return;
   }
 
   // NS target address is not address of WAN if address
-  if (lookup_in6_addr(wan.if_name, &ns->ns_hdr.nd_ns_target) == 1) {
-    debug("%s: NS target address is WAN local address. NA will not be send.",
-          __func__);
+  if (lookup_in6_addr(wan.if_name, nd_ns_target) == 1) {
+    log_debug("%s: NS target address is wan_if address.", __func__);
     return;
   };
 
   // NS target address is LAN if address or in LAN subnet /64.
-  if (lookup_in6_addr(lan.if_name, &ns->ns_hdr.nd_ns_target) > 0) {
-    debug("%s: NS target address is found in LAN if or subnet. NA will be send",
-          __func__);
+  if (lookup_in6_addr(lan.if_name, nd_ns_target) > 0) {
+    log_debug(
+        "%s: NS target address is lan_if address or belongs to lan_if subnet.",
+        __func__);
 
-    if (monitor_mode == 0)
-      send_nd_na((struct ether_addr *)ns->eth_hdr.ether_shost,
-                 &ns->ip6_hdr.ip6_src, &ns->ns_hdr.nd_ns_target);
+    if (!inet_ntop(AF_INET6, ip6_src, ntop_buf, sizeof(ntop_buf)))
+      error("inet_ntop");
+    if (!inet_ntop(AF_INET6, nd_ns_target, ntop_buf2, sizeof(ntop_buf2)))
+      error("inet_ntop");
+
+    log_info("send NA with dest address %s, target address %s", ntop_buf,
+             ntop_buf2);
+
+    if (!monitor_mode)
+      send_nd_na((struct ether_addr *)ns->eth_hdr.ether_shost, ip6_src,
+                 nd_ns_target);
+
   } else {
-    debug("%s: NS target address is not found in LAN if or subnet. NA will not "
-          "be send.",
-          __func__);
+    log_debug("%s: NS target address is not found in LAN if or subnet.",
+              __func__);
   }
 }
 
@@ -505,8 +524,6 @@ void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
                 struct in6_addr *target_addr) {
   struct raw_nd_na na;
   ssize_t n;
-
-  debug("Send ND_NA.");
 
   // Assemble a raw ND_NA packet
   memset(&na, 0, sizeof(na));
@@ -566,11 +583,11 @@ void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
   }
 
   if ((n = write(wan.bpf_fd, &na, sizeof(na))) == -1) {
-    err(1, "write");
+    error("write");
   }
 
-  debug("Write %zd of %zd characters.", n, sizeof(na));
-};
+  log_debug("Write %zd of %zd characters.", n, sizeof(na));
+}
 
 /*
  * Main loop to reflect NDP packet. This function receives NS packets and send
@@ -592,10 +609,10 @@ void ndp_reflect_loop(void) {
     if (ndfs == -1) {
       if (errno == EINTR)
         continue;
-      err(1, "poll");
+      error("poll");
     }
     if (ndfs == 0) {
-      debug("poll returns zero.");
+      log_debug("poll returns zero.");
       continue;
     }
 
@@ -604,11 +621,11 @@ void ndp_reflect_loop(void) {
 
     /* Don't choke when we get ptraced */
     if (length == -1 && errno == EINTR) {
-      debug("EINTR while read.");
+      log_debug("EINTR while read.");
       goto again;
     }
     if (length == -1)
-      err(1, "read");
+      error("read");
 
     buf = wan.buf;
     buf_limit = wan.buf + length;
@@ -616,8 +633,8 @@ void ndp_reflect_loop(void) {
     while (buf < buf_limit) {
       bh = (struct bpf_hdr *)buf;
 
-      debug("BPF header length: %u, captured length: %lu", bh->bh_hdrlen,
-            bh->bh_caplen);
+      log_debug("BPF header length: %u, captured length: %lu", bh->bh_hdrlen,
+                bh->bh_caplen);
 
       if (check_nd_ns_format(buf + bh->bh_hdrlen, bh->bh_caplen)) {
         print_nd_ns(buf + bh->bh_hdrlen);
@@ -629,19 +646,74 @@ void ndp_reflect_loop(void) {
   }
 }
 
-/*
- * Print debug messages to stderr if the debug mode is enabled.
- */
-void debug(const char *fmt, ...) {
-  extern char *__progname;
+void vlog(int pri, const char *fmt, va_list ap) {
 
+  if (daemon_mode) {
+    vsyslog(pri, fmt, ap);
+  } else {
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    fflush(stderr);
+  }
+}
+
+void log_info(const char *fmt, ...) {
   va_list ap;
 
-  if (debug_mode) {
+  va_start(ap, fmt);
+  vlog(LOG_INFO, fmt, ap);
+  va_end(ap);
+}
+
+void log_debug(const char *fmt, ...) {
+  va_list ap;
+
+  if (verbose_mode) {
     va_start(ap, fmt);
-    (void)fprintf(stderr, "%s: ", __progname);
-    (void)vfprintf(stderr, fmt, ap);
+    vlog(LOG_DEBUG, fmt, ap);
     va_end(ap);
-    (void)fprintf(stderr, "\n");
   }
+}
+
+void logit(int pri, const char *fmt, ...) {
+  va_list ap;
+
+  va_start(ap, fmt);
+  vlog(pri, fmt, ap);
+  va_end(ap);
+}
+
+static void verrorc(int code, const char *fmt, va_list ap) {
+  static char s[BUFSIZ];
+  const char *sep;
+
+  if (fmt != NULL) {
+    (void)vsnprintf(s, sizeof(s), fmt, ap);
+    sep = ": ";
+  } else {
+    s[0] = '\0';
+    sep = "";
+  }
+  if (code)
+    logit(LOG_CRIT, "fatal: %s%s%s", s, sep, strerror(code));
+  else
+    logit(LOG_CRIT, "fatal in %s%s%s", sep, s);
+}
+
+__dead void error(const char *fmt, ...) {
+  va_list ap;
+
+  vlog(LOG_ERR, fmt, ap);
+  verrorc(errno, fmt, ap);
+  va_end(ap);
+  exit(1);
+}
+
+__dead void errorx(const char *fmt, ...) {
+  va_list ap;
+
+  vlog(LOG_ERR, fmt, ap);
+  verrorc(0, fmt, ap);
+  va_end(ap);
+  exit(1);
 }
