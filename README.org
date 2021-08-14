@@ -1,22 +1,62 @@
-* ndp-nd-reflector
+* NDP Reflector
 
-** build
+** build and install
 
 #+begin_src sh
   mkdir build
   cd build
-  cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=1 ..
+  cmake ..
   make
+  doas make install
 #+end_src
 
+** start daemon
+
+#+begin_src sh
+  doas rcctl enable ndprd
+  doas rcctl set ndprd flags em1 em2
+  rcctl get ndprd
+  doas rcctl start ndprd
+#+end_src
+
+In the above example, =em1= is the WAN interface and =em2= is the LAN interface.
+
+*** debug mode
+
+By specifying the option =-dv=, =ndprd= will run in the foreground (that is, not daemonize) and log to =stderr=.
+
+#+begin_src sh
+  doas ndprd -dv em1 em2
+#+end_src
+
+If the option =-m= specified, =ndprd= receives NS packets but not send NA packets.
+
 ** source code format
+
+You can format source code via =clang-format= as follows.
 
 #+begin_src sh
   clang-format -i *.c
 #+end_src
 
-To generate =.clang-format=.
+You can also generate a format config file via =clang-format= as follows.
 
 #+begin_src sh
   clang-format -style=llvm -dump-config > .clang-format
+#+end_src
+
+** compile_commands.json for language server protocol
+
+You can generate =compile_commands.json= by running =cmake= with option =-DCMAKE_EXPORT_COMPILE_COMMANDS=1= as follows.
+
+#+begin_src sh
+  mkdir build
+  cd build
+  cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=1 ..
+#+end_src
+
+You can make a symbolic link to it.
+
+#+begin_src sh
+  ln -s build/compile_commands.json .
 #+end_src

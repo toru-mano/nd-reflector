@@ -83,8 +83,8 @@ volatile sig_atomic_t quit = 0;
 __dead void usage(void) {
   extern char *__progname;
 
-  fprintf(stderr, "usage: %s [-dmv] <wan_if_name> <lan_if_name>\n", __progname);
-  exit(1);
+  fprintf(stderr, "usage: %s [-dmv] wan_if lan_if\n", __progname);
+  exit(EXIT_FAILURE);
 }
 
 void terminate(__attribute__((unused)) int sig) { quit = 1; }
@@ -123,10 +123,14 @@ int main(int argc, char *argv[]) {
   strncpy(wan.if_name, argv[0], sizeof(wan.if_name));
   strncpy(lan.if_name, argv[1], sizeof(lan.if_name));
 
-  log_info("started with wan_if: %s, lan_if:%s", wan.if_name, lan.if_name);
+  log_info("started with wan_if: %s, lan_if: %s", wan.if_name, lan.if_name);
 
   init_wan_if_addr(&wan);
   wan.bpf_fd = open_bpf(wan.if_name);
+
+  if (daemon_mode)
+    if (daemon(0, 0) == -1)
+      error("daemon");
 
   ndp_reflect_loop();
 
@@ -713,9 +717,9 @@ static void verrorc(int code, const char *fmt, va_list ap) {
     sep = "";
   }
   if (code)
-    logit(LOG_CRIT, "fatal: %s%s%s", s, sep, strerror(code));
+    logit(LOG_CRIT, "error: %s%s%s", s, sep, strerror(code));
   else
-    logit(LOG_CRIT, "fatal in %s%s%s", sep, s);
+    logit(LOG_CRIT, "error in %s%s%s", sep, s);
 }
 
 __dead void error(const char *fmt, ...) {
