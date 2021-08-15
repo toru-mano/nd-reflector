@@ -301,7 +301,7 @@ void init_wan_if_addr(struct wan_if *wan) {
   if (!found_in6)
     errorx("Interface %s has no IPv6 link local address", wan->if_name);
 
-  log_info("complete wan_if address information: {Eth = %s, IP = %s}", __func__,
+  log_info("complete wan_if address information: {Eth = %s, IP = %s}",
            ether_ntoa(&wan->eth_addr), in6_ntoa(&wan->sin6.sin6_addr));
 }
 
