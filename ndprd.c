@@ -65,10 +65,14 @@ void print_nd_ns(u_char *);
 void process_nd_ns(u_char *);
 void send_nd_na(struct ether_addr *, struct in6_addr *, struct in6_addr *);
 void ndp_reflect_loop(void);
+void log_warning(const char *, ...);
 void log_info(const char *, ...);
 void log_debug(const char *, ...);
 __dead void error(const char *, ...);
 __dead void errorx(const char *, ...);
+// from lookup_rib.c
+void lookup_rib_init(void);
+void lookup_rib(struct in6_addr *, char *, int);
 
 int daemon_mode = 1;
 
@@ -300,8 +304,8 @@ void init_wan_if_addr(struct wan_if *wan) {
     errorx("Interface %s has no IPv6 link local address", wan->if_name);
 
   inet_ntop(AF_INET6, &wan->sin6.sin6_addr, ntop_buf, sizeof(ntop_buf));
-  log_info("%s: complete wan_if address information: {Eth = %s, IP = %s}",
-           __func__, ether_ntoa(&wan->eth_addr), ntop_buf);
+  log_info("complete wan_if address information: {Eth = %s, IP = %s}", __func__,
+           ether_ntoa(&wan->eth_addr), ntop_buf);
 }
 
 /*
@@ -462,14 +466,14 @@ void print_nd_ns(u_char *p) {
  * - Ethernet source address matches NS source link-layer address
  * - IPv6 source address is not unspecified (duplicate address detection)
  * - NS target address is global unicast address
- * - NS target address is not WAN interface address
- * - NS target address is LAN interface address or in LAN /64 subnet
+ * - Packets destinated to NS target address are routed to LAN interface.
  */
 void process_nd_ns(u_char *p) {
   struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
   struct in6_addr *ip6_src = &ns->ip6_hdr.ip6_src;
   struct in6_addr *nd_ns_target = &ns->ns_hdr.nd_ns_target;
-  char ntop_buf[INET6_ADDRSTRLEN], ntop_buf2[INET6_ADDRSTRLEN];
+
+  char dst_if_name[IFNAMSIZ];
 
   // do sanity check
   // ethernet source address == nd_opt source link-layer address
@@ -507,33 +511,28 @@ void process_nd_ns(u_char *p) {
     return;
   }
 
-  // NS target address is not address of WAN if address
-  if (lookup_in6_addr(wan.if_name, nd_ns_target) == 1) {
-    log_debug("%s: NS target address is wan_if address.", __func__);
-    return;
-  };
+  lookup_rib(nd_ns_target, dst_if_name, sizeof(dst_if_name));
 
-  // NS target address is LAN if address or in LAN subnet /64.
-  if (lookup_in6_addr(lan.if_name, nd_ns_target) > 0) {
-    log_debug(
-        "%s: NS target address is lan_if address or belongs to lan_if subnet.",
-        __func__);
-
-    if (!inet_ntop(AF_INET6, ip6_src, ntop_buf, sizeof(ntop_buf)))
-      error("inet_ntop");
-    if (!inet_ntop(AF_INET6, nd_ns_target, ntop_buf2, sizeof(ntop_buf2)))
-      error("inet_ntop");
-
-    log_info("send NA with dest address %s, target address %s", ntop_buf,
-             ntop_buf2);
-
-    if (!monitor_mode)
-      send_nd_na((struct ether_addr *)ns->eth_hdr.ether_shost, ip6_src,
-                 nd_ns_target);
-
+  if (strncmp(lan.if_name, dst_if_name, IFNAMSIZ)) {
+    log_debug("%s: NS target address is NOT routed to LAN interface %s",
+              __func__, lan.if_name);
   } else {
-    log_debug("%s: NS target address is not found in LAN if or subnet.",
-              __func__);
+    log_debug("%s: NS target address is routed to LAN interface %s", __func__,
+              lan.if_name);
+
+    {
+      char ntop_buf1[INET6_ADDRSTRLEN], ntop_buf2[INET6_ADDRSTRLEN];
+
+      if (!inet_ntop(AF_INET6, ip6_src, ntop_buf1, sizeof(ntop_buf1)))
+        log_warning("inet_ntop error: %s", strerror(errno));
+      if (!inet_ntop(AF_INET6, nd_ns_target, ntop_buf2, sizeof(ntop_buf2)))
+        log_warning("inet_ntop error: %s", strerror(errno));
+      log_info("send NA with dest address %s, target address %s", ntop_buf1,
+               ntop_buf2);
+    }
+
+    send_nd_na((struct ether_addr *)ns->eth_hdr.ether_shost, ip6_src,
+               nd_ns_target);
   }
 }
 
@@ -544,6 +543,11 @@ void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
                 struct in6_addr *target_addr) {
   struct raw_nd_na na;
   ssize_t n;
+
+  if (monitor_mode) {
+    log_debug("skip NA sending because of monitor mode");
+    return;
+  }
 
   // Assemble a raw ND_NA packet
   memset(&na, 0, sizeof(na));
@@ -623,6 +627,8 @@ void ndp_reflect_loop(void) {
   u_char *buf, *buf_limit;
   struct bpf_hdr *bh;
 
+  lookup_rib_init();
+
   while (!quit) {
 
     ndfs = poll(&pfd, 1, timeout);
@@ -675,6 +681,14 @@ void vlog(int pri, const char *fmt, va_list ap) {
     fprintf(stderr, "\n");
     fflush(stderr);
   }
+}
+
+void log_warning(const char *fmt, ...) {
+  va_list ap;
+
+  va_start(ap, fmt);
+  vlog(LOG_WARNING, fmt, ap);
+  va_end(ap);
 }
 
 void log_info(const char *fmt, ...) {
