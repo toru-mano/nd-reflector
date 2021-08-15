@@ -28,8 +28,9 @@ struct rt_msghdr *rtm = &m_rtmsg.m_rtm;
 static int rtsock, pid, seq;
 
 void lookup_rib_init(void);
-void lookup_rib(struct in6_addr *, char *, int);
+void lookup_rib(struct in6_addr *, char *);
 // from ndprd.c
+char *in6_ntoa(struct in6_addr *);
 void log_warning(const char *, ...);
 void log_info(const char *, ...);
 void log_debug(const char *, ...);
@@ -37,7 +38,7 @@ __dead void error(const char *, ...);
 __dead void errorx(const char *, ...);
 
 static void assemble_rtmsg(struct in6_addr *);
-static void parse_rtmsg(int, char *, int);
+static void parse_rtmsg(int, char *);
 
 void lookup_rib_init(void) {
   pid = getpid();
@@ -48,17 +49,12 @@ void lookup_rib_init(void) {
 /*
  * Lookup routing entries for destination IP6 address `dst_addr`.
  * If route is found and then it's interface name is stored in `if_name`.
- * Size of `if_name` must be less than `name_size`.
  */
-void lookup_rib(struct in6_addr *dst_addr, char *if_name, int name_size) {
+void lookup_rib(struct in6_addr *dst_addr, char *if_name) {
   int rlen;
-  char ntop_buf[INET6_ADDRSTRLEN];
-
-  if (!inet_ntop(AF_INET6, dst_addr, ntop_buf, sizeof(ntop_buf)))
-    error("inet_ntop");
 
   log_debug("%s: lookup interface of destination %s in routing table", __func__,
-            ntop_buf);
+            in6_ntoa(dst_addr));
 
   assemble_rtmsg(dst_addr);
 
@@ -75,7 +71,7 @@ void lookup_rib(struct in6_addr *dst_addr, char *if_name, int name_size) {
     log_warning("routing socket read error: %s", strerror(errno));
   }
 
-  parse_rtmsg(rlen, if_name, name_size);
+  parse_rtmsg(rlen, if_name);
 }
 
 static void assemble_rtmsg(struct in6_addr *dst_addr) {
@@ -103,7 +99,7 @@ static void assemble_rtmsg(struct in6_addr *dst_addr) {
   rtm->rtm_msglen = cp - (char *)&m_rtmsg;
 }
 
-static void parse_rtmsg(int msglen, char *if_name, int name_size) {
+static void parse_rtmsg(int msglen, char *if_name) {
   struct sockaddr *sa;
   struct sockaddr_dl *sdl;
   char *cp;
@@ -130,8 +126,7 @@ static void parse_rtmsg(int msglen, char *if_name, int name_size) {
         sa = (struct sockaddr *)cp;
         if (i == RTA_IFP && sa->sa_family == AF_LINK) {
           sdl = (struct sockaddr_dl *)sa;
-          (void)strncpy(if_name, sdl->sdl_data,
-                        name_size < sdl->sdl_nlen ? name_size : sdl->sdl_nlen);
+          (void)strncpy(if_name, sdl->sdl_data, sdl->sdl_nlen);
           if_name[sdl->sdl_nlen] = '\0';
           log_debug("%s: lookup routing table result: %s", __func__, if_name);
         }
