@@ -196,6 +196,11 @@ int open_bpf(char *if_name) {
     error("ioctl(BIOCSETIF)");
   log_debug("Attach BPF descriptor to %s", if_name);
 
+  /* Set promiscuous mode to receive ethernet multicast. */
+  if (ioctl(fd, BIOCPROMISC) == -1)
+    error("ioctl(BIOCPROMISC)");
+  log_debug("Interface %s enter promiscuous mode.", if_name);
+
   /* Get the BPF buffer length. */
   if (ioctl(fd, BIOCGBLEN, &sz) == -1)
     error("ioctl(BIOCGBLEN)");
