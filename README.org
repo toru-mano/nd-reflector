@@ -1,6 +1,6 @@
 * A Neighbor Discovery (ND) reflector for OpenBSD
 
-An ND reflector works like ND proxies but does not check the host presence. It listens for a Neighbor Solicitation (NS) packet destined to its subnet and immediately replies to it by sending a neighbor advertisement (NA) packet. Thus it is a reflector.
+An ND reflector works like ND proxies (RFC 4389) but does not check the host presence. It listens for a Neighbor Solicitation (NS) packet destined to its subnet and immediately replies to it by sending a neighbor advertisement (NA) packet. Thus it is a reflector.
 
 The ND reflector aims to provide global IPv6 reachability to hosts in an IPv4/v6 dual-stack home network without NAT66 translation as in the following diagram.
 
