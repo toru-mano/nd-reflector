@@ -2,7 +2,7 @@
 
 An ND reflector works like ND proxies but does not check the host presence. It listens for a Neighbor Solicitation (NS) packet destined to its subnet and immediately replies to it by sending a neighbor advertisement (NA) packet. Thus it is a reflector.
 
-The ND reflector aims to provide global IPv6 addresses to hosts in an IPv4/v6 dual-stack home network without NAT66 translation as in the following diagram.
+The ND reflector aims to provide global IPv6 reachability to hosts in an IPv4/v6 dual-stack home network without NAT66 translation as in the following diagram.
 
 #+begin_src picture
                +-------------+                       +------------+            +--------+
@@ -47,6 +47,34 @@ By specifying the option =-dv=, =ndprd= will run in the foreground (that is, not
 #+end_src
 
 If the option =-m= specified, =ndprd= receives NS packets but not send NA packets.
+
+** Example configuration
+
+WAN interface configuration =/etc/hostname.em0=.
+
+#+begin_src conf
+  inet6 eui64
+  !route add -inet6 default fe80::1%em0
+#+end_src
+
+LAN interface configuration =/etc/hostname.em1=. The IPv6 subnet must match the advertised address prefix in the RA packet from the ISP router.
+
+#+begin_src conf
+  inet6 2001:db8::1 64
+#+end_src
+
+Router advertisement daemon (rad) configuration =/etc/rad.conf=
+
+#+begin_src conf
+  interface em1
+#+end_src
+
+ND reflector configuration and routing.
+
+#+begin_src sh
+  doas rcctl set ndprd flags em0 em1
+  doas sysctl net.inet6.ip6.forwarding=1
+#+end_src
 
 ** Testing environment
 
