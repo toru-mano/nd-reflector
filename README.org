@@ -1,16 +1,33 @@
-* NDP Reflector
+* A Neighbor Discovery (ND) reflector for OpenBSD
 
-** build and install
+An ND reflector works like ND proxies but does not check the host presence. It listens for a Neighbor Solicitation (NS) packet destined to its subnet and immediately replies to it by sending a neighbor advertisement (NA) packet. Thus it is a reflector.
+
+The ND reflector aims to provide global IPv6 addresses to hosts in an IPv4/v6 dual-stack home network without NAT66 translation as in the following diagram.
+
+#+begin_src picture
+               +-------------+                       +------------+            +--------+
+               |             | IPv4 PPPoE        Wan | HomeRouter | Lan        |        |
+  Internet ----+ ISP Router  +-----------------------+ (OpenBSD)  +------------+  Host  |
+               |             | IPv6 over Ethenet     |            |            |        |
+               +-------------+  (RA with /64)        +------------+            +--------+
+#+end_src
+
+Proper proxies check the presence of the host corresponding to the NS target address by sending an NS packet from the LAN interface. If they receive a reply NA packet, then they proxy it to the original sender.
+
+On the other hand, when a reflector receives an NS packet arriving WAN interface, it consults the routing table checking the destination interface of the NS target address. If the destination interface matches the LAN interface, then the reflector sends an NA packet to the sender of the NS packet.
+
+
+** Build and install
 
 #+begin_src sh
   mkdir build
   cd build
-  cmake ..
+  cmake -DCMAKE_BUILD_TYPE=Release ..
   make
   doas make install
 #+end_src
 
-** start daemon
+** Start daemon
 
 #+begin_src sh
   doas rcctl enable ndprd
@@ -31,32 +48,13 @@ By specifying the option =-dv=, =ndprd= will run in the foreground (that is, not
 
 If the option =-m= specified, =ndprd= receives NS packets but not send NA packets.
 
-** source code format
+** Testing environment
 
-You can format source code via =clang-format= as follows.
+- OpenBSD 6.9 amd64
 
-#+begin_src sh
-  clang-format -i *.c
-#+end_src
+** Similar projects
 
-You can also generate a format config file via =clang-format= as follows.
-
-#+begin_src sh
-  clang-format -style=llvm -dump-config > .clang-format
-#+end_src
-
-** compile_commands.json for language server protocol
-
-You can generate =compile_commands.json= by running =cmake= with option =-DCMAKE_EXPORT_COMPILE_COMMANDS=1= as follows.
-
-#+begin_src sh
-  mkdir build
-  cd build
-  cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=1 ..
-#+end_src
-
-You can make a symbolic link to it.
-
-#+begin_src sh
-  ln -s build/compile_commands.json .
-#+end_src
+- FreeBSD kernel module for ND proxy
+  - https://github.com/AlexandreFenyo/ndproxy
+- Linux and FreeBSD deamons for ND proxy
+  - https://github.com/DanielAdolfsson/ndppd

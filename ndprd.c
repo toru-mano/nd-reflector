@@ -472,9 +472,9 @@ void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
   // Assemble a raw ND_NA packet
   bzero(&na, sizeof(na));
 
-  // Ether header
+  // Ether header. Kernel fill ethernet source address based on outgoing
+  // interface, see BIOCSHDRMPLT in bpf(4).
   memcpy(&na.eth_hdr.ether_dhost, dst_ll_addr, ETHER_ADDR_LEN);
-  memcpy(&na.eth_hdr.ether_shost, &wan.eth_addr, ETHER_ADDR_LEN);
   na.eth_hdr.ether_type = htons(ETHERTYPE_IPV6);
 
   // IPv6 header
