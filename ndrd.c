@@ -127,6 +127,11 @@ int main(int argc, char *argv[]) {
   if (argc != 2)
     usage();
 
+  if(unveil("/dev/bpf", "rw") == -1)
+    error("unveil");
+  if(unveil(NULL, NULL) == -1)
+    error("unveil");
+
   strncpy(wan.if_name, argv[0], sizeof(wan.if_name));
   strncpy(lan.if_name, argv[1], sizeof(lan.if_name));
 
