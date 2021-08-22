@@ -30,23 +30,23 @@ On the other hand, when a reflector receives an NS packet arriving WAN interface
 ** Start daemon
 
 #+begin_src sh
-  doas rcctl enable ndprd
-  doas rcctl set ndprd flags em1 em2
-  rcctl get ndprd
-  doas rcctl start ndprd
+  doas rcctl enable ndrd
+  doas rcctl set ndrd flags em1 em2
+  rcctl get ndrd
+  doas rcctl start ndrd
 #+end_src
 
 In the above example, =em1= is the WAN interface and =em2= is the LAN interface.
 
 *** debug mode
 
-By specifying the option =-dv=, =ndprd= will run in the foreground (that is, not daemonize) and log to =stderr=.
+By specifying the option =-dv=, =ndrd= will run in the foreground (that is, not daemonize) and log to =stderr=.
 
 #+begin_src sh
   doas ndprd -dv em1 em2
 #+end_src
 
-If the option =-m= specified, =ndprd= receives NS packets but not send NA packets.
+If the option =-m= specified, =ndrd= receives NS packets but not send NA packets.
 
 ** Example configuration
 
@@ -72,7 +72,7 @@ Router advertisement daemon (rad) configuration =/etc/rad.conf=
 ND reflector configuration and routing.
 
 #+begin_src sh
-  doas rcctl set ndprd flags em0 em1
+  doas rcctl set ndrd flags em0 em1
   doas sysctl net.inet6.ip6.forwarding=1
 #+end_src
 

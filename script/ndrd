@@ -1,6 +1,6 @@
 #!/bin/ksh
 
-daemon="/usr/local/sbin/ndprd"
+daemon="/usr/local/sbin/ndrd"
 
 . /etc/rc.d/rc.subr
 

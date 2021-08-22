@@ -64,7 +64,7 @@ int check_nd_ns_format(u_char *, size_t);
 void print_nd_ns(u_char *);
 void process_nd_ns(u_char *);
 void send_nd_na(struct ether_addr *, struct in6_addr *, struct in6_addr *);
-void ndp_reflect_loop(void);
+void nd_reflect_loop(void);
 char *in6_ntoa(struct in6_addr *);
 void log_warning(const char *, ...);
 void log_info(const char *, ...);
@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {
     if (daemon(0, 0) == -1)
       error("daemon");
 
-  ndp_reflect_loop();
+  nd_reflect_loop();
 
   close(wan.bpf_fd);
 
@@ -534,10 +534,10 @@ void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 }
 
 /*
- * Main loop to reflect NDP packet. This function receives NS packets and send
+ * Main loop to reflect ND packet. This function receives NS packets and send
  * NA packets.
  */
-void ndp_reflect_loop(void) {
+void nd_reflect_loop(void) {
   struct pollfd pfd = {
       .fd = wan.bpf_fd,
       .events = POLLIN,
