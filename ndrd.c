@@ -139,6 +139,11 @@ int main(int argc, char *argv[]) {
     if (daemon(0, 0) == -1)
       error("daemon");
 
+  lookup_rib_init();
+
+  if (pledge("stdio", NULL) == -1)
+    error("pledge");
+
   nd_reflect_loop();
 
   close(wan.bpf_fd);
@@ -546,8 +551,6 @@ void nd_reflect_loop(void) {
   ssize_t length;
   u_char *buf, *buf_limit;
   struct bpf_hdr *bh;
-
-  lookup_rib_init();
 
   while (!quit) {
 
