@@ -127,9 +127,9 @@ int main(int argc, char *argv[]) {
   if (argc != 2)
     usage();
 
-  if(unveil("/dev/bpf", "rw") == -1)
+  if (unveil("/dev/bpf", "rw") == -1)
     error("unveil");
-  if(unveil(NULL, NULL) == -1)
+  if (unveil(NULL, NULL) == -1)
     error("unveil");
 
   strncpy(wan.if_name, argv[0], sizeof(wan.if_name));
@@ -449,26 +449,28 @@ void process_nd_ns(u_char *p) {
   if (strncmp(lan.if_name, dst_if_name, IFNAMSIZ)) {
     log_debug("%s: NS target address is NOT routed to LAN interface %s",
               __func__, lan.if_name);
-  } else {
-    log_debug("%s: NS target address is routed to LAN interface %s", __func__,
-              lan.if_name);
-
-    {
-      char buf[INET6_ADDRSTRLEN];
-
-      (void)strncpy(buf, in6_ntoa(ip6_src), sizeof(buf));
-      log_info("send NA with dest address %s, target address %s", buf,
-               in6_ntoa(nd_ns_target));
-    }
-
-    if (monitor_mode) {
-      log_debug("skip NA sending because of monitor mode");
-      return;
-    }
-
-    send_nd_na((struct ether_addr *)ns->eth_hdr.ether_shost, ip6_src,
-               nd_ns_target);
+    return;
   }
+
+  log_debug("%s: NS target address is routed to LAN interface %s", __func__,
+            lan.if_name);
+
+  // log NA packet info
+  {
+    char buf[INET6_ADDRSTRLEN];
+
+    (void)strncpy(buf, in6_ntoa(ip6_src), sizeof(buf));
+    log_info("send NA with dest address %s, target address %s", buf,
+             in6_ntoa(nd_ns_target));
+  }
+
+  if (monitor_mode) {
+    log_debug("skip NA sending because of monitor mode");
+    return;
+  }
+
+  send_nd_na((struct ether_addr *)ns->eth_hdr.ether_shost, ip6_src,
+             nd_ns_target);
 }
 
 /*
@@ -548,30 +550,30 @@ void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
  * NA packets.
  */
 void nd_reflect_loop(void) {
-  struct pollfd pfd = {
-      .fd = wan.bpf_fd,
-      .events = POLLIN,
-  };
-  int ndfs, timeout = INFTIM;
+  struct pollfd pfd;
+  int nfds, timeout = INFTIM;
   ssize_t length;
   u_char *buf, *buf_limit;
   struct bpf_hdr *bh;
 
+  pfd.fd = wan.bpf_fd;
+  pfd.events = POLLIN;
+
   while (!quit) {
 
-    ndfs = poll(&pfd, 1, timeout);
-    if (ndfs == -1) {
+    nfds = poll(&pfd, 1, timeout);
+    if (nfds == -1) {
       if (errno == EINTR)
         continue;
       error("poll");
     }
-    if (ndfs == 0) {
+    if (nfds == 0) {
       log_debug("poll returns zero.");
       continue;
     }
 
   again:
-    length = read(pfd.fd, (char *)wan.buf, wan.buf_max);
+    length = read(wan.bpf_fd, (char *)wan.buf, wan.buf_max);
 
     /* Don't choke when we get ptraced */
     if (length == -1 && errno == EINTR) {

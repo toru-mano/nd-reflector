@@ -10,6 +10,7 @@
 #include <err.h>
 #include <errno.h>
 #include <netdb.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,7 @@ struct {
 } m_rtmsg;
 
 struct rt_msghdr *rtm = &m_rtmsg.m_rtm;
-static int rtsock, pid, seq;
+static int rtsock;
 
 void lookup_rib_init(void);
 void lookup_rib(struct in6_addr *, char *);
@@ -37,44 +38,84 @@ void log_debug(const char *, ...);
 __dead void error(const char *, ...);
 __dead void errorx(const char *, ...);
 
-static void assemble_rtmsg(struct in6_addr *);
+static void assemble_rtmsg(struct in6_addr *, int);
 static void parse_rtmsg(int, char *);
 
-void lookup_rib_init(void) {
-  pid = getpid();
-  rtsock = socket(AF_ROUTE, SOCK_RAW, AF_INET6);
-  seq = 0;
-}
+void lookup_rib_init(void) { rtsock = socket(AF_ROUTE, SOCK_RAW, AF_INET6); }
 
 /*
  * Lookup routing entries for destination IP6 address `dst_addr`.
  * If route is found and then it's interface name is stored in `if_name`.
  */
 void lookup_rib(struct in6_addr *dst_addr, char *if_name) {
-  int rlen;
+  struct pollfd pfd;
+  struct timespec now, stop, timeout;
+  int rlen, pid, seq, nfds;
 
   log_debug("%s: lookup interface of destination %s in routing table", __func__,
             in6_ntoa(dst_addr));
 
-  assemble_rtmsg(dst_addr);
+  pid = getpid();
+  seq = arc4random();
+
+  assemble_rtmsg(dst_addr, seq);
+
+  // Set rtsock read timeout for 3 seconds
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  timespecclear(&timeout);
+  timeout.tv_sec = 3;
+  timespecadd(&now, &timeout, &stop);
 
   rlen = write(rtsock, (char *)&m_rtmsg, rtm->rtm_msglen);
+  log_debug("%s: rtsock write %d bytes", __func__, rlen);
   if (rlen == -1) {
-    log_warning("routing socket write error: %s", strerror(errno));
+    log_warning("rtsock write error: %s", strerror(errno));
   }
 
-  do {
+  while (1) {
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (timespeccmp(&stop, &now, <=))
+      break;
+    timespecsub(&stop, &now, &timeout);
+
+    pfd.fd = rtsock;
+    pfd.events = POLLIN;
+    nfds = ppoll(&pfd, 1, &timeout, NULL);
+
+    if (nfds == -1) {
+      if (errno == EINTR)
+        continue;
+      log_warning("ppoll(rtsock): %s", strerror(errno));
+      return;
+    }
+    if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      log_warning("rtsock: ERR|HUP|NVAL");
+      return;
+    }
+    if (nfds == 0 || (pfd.revents & POLLIN) == 0)
+      continue;
+
     rlen = read(rtsock, (char *)&m_rtmsg, sizeof(m_rtmsg));
-  } while (rlen > 0 && (rtm->rtm_version != RTM_VERSION ||
-                        rtm->rtm_seq != seq || rtm->rtm_pid != pid));
-  if (rlen == -1) {
-    log_warning("routing socket read error: %s", strerror(errno));
+    if (rlen == -1) {
+      log_warning("rtsock read error: %s", strerror(errno));
+      return;
+    }
+    if (rlen == 0) {
+      log_warning("rtscok read 0 bytes");
+      return;
+    }
+    if (rtm->rtm_version == RTM_VERSION && rtm->rtm_seq == seq &&
+        rtm->rtm_pid == pid) {
+      log_debug(
+          "%s: rtsock read %d bytes: ver %d type %d seq %d pid %d flag %#x",
+          __func__, rlen, rtm->rtm_version, rtm->rtm_type, rtm->rtm_seq,
+          rtm->rtm_pid, rtm->rtm_flags);
+      parse_rtmsg(rlen, if_name);
+    }
   }
-
-  parse_rtmsg(rlen, if_name);
 }
 
-static void assemble_rtmsg(struct in6_addr *dst_addr) {
+static void assemble_rtmsg(struct in6_addr *dst_addr, int seq) {
   struct sockaddr_in6 sin6 = {.sin6_len = sizeof(sin6),
                               .sin6_family = AF_INET6,
                               .sin6_addr = *dst_addr};
@@ -85,7 +126,7 @@ static void assemble_rtmsg(struct in6_addr *dst_addr) {
   rtm->rtm_version = RTM_VERSION;
   rtm->rtm_type = RTM_GET;
   rtm->rtm_addrs = (RTA_DST | RTA_IFP);
-  rtm->rtm_seq = ++seq;
+  rtm->rtm_seq = seq;
 
 #define NEXTADDR(w, s)                                                         \
   if (rtm->rtm_addrs & (w)) {                                                  \
