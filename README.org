@@ -98,6 +98,8 @@ One way to avoid those issues is to block such packets by adding the following r
 block in on em0 inet6 proto ipv6-icmp from fe80::/10 to 2000::/3 icmp6-type neighbrsol
 #+end_src
 
+Note this configuration does not affect ND reflector behavior because ND reflector uses bpf to receive packets, and bpf works before pf.
+
 ** Testing environment
 
 - OpenBSD 6.9 amd64
