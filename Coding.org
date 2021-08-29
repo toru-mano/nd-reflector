@@ -2,7 +2,7 @@
 
 This memo provides tips for coding.
 
-* Format Source code forma
+* Format Source code format
 
 You can format source code via =clang-format= as follows.
 
