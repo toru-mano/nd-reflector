@@ -84,13 +84,13 @@ block in on em0 inet6 proto ipv6-icmp from fe80::/10 to 2000::/3 icmp6-type neig
 
 ** Caveats
 
-IPS routers periodically send NS packets to unicast ethernet addresses (not multicast ethernet addresses) to update NDP tables. When a reflector receives these packets, it replies with NA packets as usual. At the same time, OpenBSD kernel tries to forward these NS packets to a LAN interface. These NS packets have link-local source addresses and global unicast destination addresses. In this case, the scope of the source address is smaller than that of the destination. So, the kernel refuses to forward these packets and logs messages like below.
+ISP routers periodically send NS packets to unicast ethernet addresses (not multicast ethernet addresses) to update NDP tables. When a reflector receives these packets, it replies with NA packets as usual. At the same time, OpenBSD kernel tries to forward these NS packets to a LAN interface. These NS packets have link-local source addresses and global unicast destination addresses. In this case, the scope of the source address is smaller than that of the destination. So, the kernel refuses to forward these packets and logs messages like below.
 
 #+begin_src sh
   cannot forward src fe80::1, dst 2001:db8::1, nxt 58, rcvif 1, outif 2
 #+end_src
 
-Also, the kernel sends ICMP6 destination unreachable error with code 2 (beyond the scope of source address) to ISP routers to tell the error. Your =dmesg= or =/var/log/messages= will be filled up the above messages. ISP routers possibly confuse by receiving NA replies and unreachable errors at the same time.
+ Your =dmesg= or =/var/log/messages= will be filled up the above messages. Also, the kernel sends ICMP6 destination unreachable error with code 2 (beyond the scope of source address) to ISP routers to tell the error. ISP routers possibly confuse by receiving NA replies and unreachable errors at the same time.
 
 One way to avoid those issues is to block such packets by adding the following rule to =pf.conf=.
 
