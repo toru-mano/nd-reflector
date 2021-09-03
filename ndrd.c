@@ -667,13 +667,13 @@ static void verrorc(int code, const char *fmt, va_list ap) {
   if (code)
     logit(LOG_CRIT, "error: %s%s%s", s, sep, strerror(code));
   else
-    logit(LOG_CRIT, "error in %s%s%s", sep, s);
+    logit(LOG_CRIT, "error%s%s", sep, s);
 }
 
 __dead void error(const char *fmt, ...) {
   va_list ap;
 
-  vlog(LOG_ERR, fmt, ap);
+  va_start(ap, fmt);
   verrorc(errno, fmt, ap);
   va_end(ap);
   exit(EXIT_FAILURE);
@@ -682,7 +682,7 @@ __dead void error(const char *fmt, ...) {
 __dead void errorx(const char *fmt, ...) {
   va_list ap;
 
-  vlog(LOG_ERR, fmt, ap);
+  va_start(ap, fmt);
   verrorc(0, fmt, ap);
   va_end(ap);
   exit(EXIT_FAILURE);
