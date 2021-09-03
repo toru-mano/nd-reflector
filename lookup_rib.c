@@ -41,7 +41,10 @@ __dead void errorx(const char *, ...);
 static void assemble_rtmsg(struct in6_addr *, int);
 static void parse_rtmsg(int, char *);
 
-void lookup_rib_init(void) { rtsock = socket(AF_ROUTE, SOCK_RAW, AF_INET6); }
+void lookup_rib_init(void) {
+  if ((rtsock = socket(AF_ROUTE, SOCK_RAW, AF_INET6)) == -1)
+    error("socket(AF_ROUTE)");
+}
 
 /*
  * Lookup routing entries for destination IP6 address `dst_addr`.
