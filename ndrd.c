@@ -32,7 +32,7 @@ struct wan_if {
 	struct ether_addr		 eth_addr;
 	struct sockaddr_in6		 sin6; /* Link-local address */
 	int				 bpf_fd;
-	u_char				*buf_buf;
+	u_char				*bpf_buf;
 	size_t				 buf_max;
 } wan;
 
@@ -221,8 +221,8 @@ int open_bpf(char *if_name)
 
 	/* Allocate buffer for BPF read */
 	wan.buf_max = sz;
-	wan.buf_buf = malloc(wan.buf_max);
-	if (!wan.buf_buf)
+	wan.bpf_buf = malloc(wan.buf_max);
+	if (!wan.bpf_buf)
 		errorx("malloc for BFP buffer %zu byte", wan.buf_max);
 	log_debug("Allocate %zu Bytes buffer for BPF descriptor.", wan.buf_max);
 
@@ -591,7 +591,7 @@ void nd_reflect_loop(void)
 		}
 
 	again:
-		length = read(wan.bpf_fd, (char *)wan.buf_buf, wan.buf_max);
+		length = read(wan.bpf_fd, (char *)wan.bpf_buf, wan.buf_max);
 
 		/* Don't choke when we get ptraced */
 		if (length == -1 && errno == EINTR) {
@@ -601,8 +601,8 @@ void nd_reflect_loop(void)
 		if (length == -1)
 			error("read");
 
-		buf = wan.buf_buf;
-		buf_limit = wan.buf_buf + length;
+		buf = wan.bpf_buf;
+		buf_limit = wan.bpf_buf + length;
 
 		while (buf < buf_limit) {
 			bh = (struct bpf_hdr *)buf;
