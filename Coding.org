@@ -2,20 +2,6 @@
 
 This memo provides tips for coding.
 
-* Format Source code format
-
-You can format source code via =clang-format= as follows.
-
-#+begin_src sh
-  clang-format -i *.c
-#+end_src
-
-You can also generate a format config file via =clang-format= as follows.
-
-#+begin_src sh
-  clang-format -style=llvm -dump-config > .clang-format
-#+end_src
-
 * Generate compile_commands.json for language server protocol
 
 You can generate =compile_commands.json= by running =cmake= with option =-DCMAKE_EXPORT_COMPILE_COMMANDS=1= as follows.
