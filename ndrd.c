@@ -188,7 +188,8 @@ static struct bpf_program filter = {sizeof insns / sizeof(insns[0]), insns};
 /*
  * Open a BPF file and attach it to the interface named 'if_name'.
  */
-int open_bpf(char *if_name)
+int
+open_bpf(char *if_name)
 {
 	int		 fd, immediate, sz, flag;
 	struct ifreq	 ifr;
@@ -255,7 +256,8 @@ int open_bpf(char *if_name)
 /*
  * Initialize WAN interface's Ethernet address and IPv6 link local address.
  */
-void init_wan_if_addr(struct wan_if *wan)
+void
+init_wan_if_addr(struct wan_if *wan)
 {
 	struct ifaddrs		 *ifap, *ifa;
 	struct sockaddr_dl	 *sdl;
@@ -331,11 +333,8 @@ void init_wan_if_addr(struct wan_if *wan)
 	    ether_ntoa(&wan->eth_addr), in6_ntoa(&wan->sin6.sin6_addr));
 }
 
-/*
- * Check packet format of received packet. If it is valid NS packet then
- * return 1. Otherwise return 0.
- */
-int check_nd_ns_format(u_char *p, size_t len)
+int
+check_nd_ns_format(u_char *p, size_t len)
 {
 	struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
@@ -344,46 +343,48 @@ int check_nd_ns_format(u_char *p, size_t len)
 	if (len < sizeof(struct raw_nd_ns)) {
 		log_debug("Truncated packet or NS with unspecified source IPv6"
 		    " address.");
-		return 0;
+		return (1);
 	}
 
 	if (ntohs(ns->eth_hdr.ether_type) != ETHERTYPE_IPV6) {
 		log_debug("Not an IPv6 packet.");
-		return 0;
+		return (1);
 	}
 
 	if (len != sizeof(struct ether_header) + sizeof(struct ip6_hdr) +
 	    ntohs(ns->ip6_hdr.ip6_plen)) {
 		log_debug("IPv6 payload length %u missmatches captured length.",
 		    ntohs(ns->ip6_hdr.ip6_plen));
-		return 0;
+		return (1);
 	}
 
 	if (ns->ip6_hdr.ip6_nxt != IPPROTO_ICMPV6) {
 		log_debug("Not an ICMPv6 packet.");
-		return 0;
+		return (1);
 	}
 
 	if (ns->ns_hdr.nd_ns_type != ND_NEIGHBOR_SOLICIT) {
 		log_debug("Not a ND_NS packet.");
-		return 0;
+		return (1);
 	}
 
 	// ND_NS with specified address, that is no unspecified address, has at
 	// least one ND option.
 	if (len == sizeof(struct raw_nd_ns)) {
-		return ns->opt_hdr.nd_opt_type == ND_OPT_SOURCE_LINKADDR &&
-			ns->opt_hdr.nd_opt_len == 1;
+		if (ns->opt_hdr.nd_opt_type == ND_OPT_SOURCE_LINKADDR &&
+		    ns->opt_hdr.nd_opt_len == 1)
+			return (0);
 		log_debug("Unsupported ND opton, type: %u, len %u",
 		    ns->opt_hdr.nd_opt_type, ns->opt_hdr.nd_opt_len);
+		return (1);
 	}
 
 	log_debug("More than one ND optoins.");
-
-	return 0;
+	return (1);
 }
 
-void print_nd_ns(u_char *p)
+void
+print_nd_ns(u_char *p)
 {
 	struct raw_nd_ns *ns = (struct raw_nd_ns *)p;
 
@@ -415,13 +416,13 @@ void print_nd_ns(u_char *p)
  * - NS target address is global unicast address
  * - Packets destinated to NS target address are routed to LAN interface.
  */
-void process_nd_ns(u_char *p)
+void
+process_nd_ns(u_char *p)
 {
-	struct raw_nd_ns	 *ns = (struct raw_nd_ns *)p;
-	struct in6_addr	 *ip6_src = &ns->ip6_hdr.ip6_src;
-	struct in6_addr	 *nd_ns_target = &ns->ns_hdr.nd_ns_target;
-
-	char dst_if_name[IFNAMSIZ];
+	struct raw_nd_ns	*ns = (struct raw_nd_ns *)p;
+	struct in6_addr	*ip6_src = &ns->ip6_hdr.ip6_src;
+	struct in6_addr	*nd_ns_target = &ns->ns_hdr.nd_ns_target;
+	char			 dst_if_name[IFNAMSIZ], buf[INET6_ADDRSTRLEN];
 
 	// do sanity check
 	// ethernet source address == nd_opt source link-layer address
@@ -472,13 +473,10 @@ void process_nd_ns(u_char *p)
 	    __func__, lan.if_name);
 
 	// log NA packet info
-	{
-		char buf[INET6_ADDRSTRLEN];
 
-		(void)strncpy(buf, in6_ntoa(ip6_src), sizeof(buf));
-		log_info("send NA with dest address %s, target address %s", buf,
-		    in6_ntoa(nd_ns_target));
-	}
+	(void)strncpy(buf, in6_ntoa(ip6_src), sizeof(buf));
+	log_info("send NA with dest address %s, target address %s", buf,
+	    in6_ntoa(nd_ns_target));
 
 	if (monitor_mode) {
 		log_debug("skip NA sending because of monitor mode");
@@ -492,8 +490,9 @@ void process_nd_ns(u_char *p)
 /*
  * Assemble raw NA packet and send it via BPF descriptor.
  */
-void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
-		struct in6_addr *target_addr)
+void
+send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
+    struct in6_addr *target_addr)
 {
 	struct raw_nd_na	 na;
 	ssize_t		 n;
@@ -566,7 +565,8 @@ void send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
  * Main loop to reflect ND packet. This function receives NS packets and send
  * NA packets.
  */
-void nd_reflect_loop(void)
+void
+nd_reflect_loop(void)
 {
 	struct pollfd		 pfd;
 	int			 nfds, timeout = INFTIM;
@@ -610,7 +610,7 @@ void nd_reflect_loop(void)
 			log_debug("BPF header length: %u, captured length: %lu",
 			    bh->bh_hdrlen, bh->bh_caplen);
 
-			if (check_nd_ns_format(buf + bh->bh_hdrlen,
+			if (!check_nd_ns_format(buf + bh->bh_hdrlen,
 			    bh->bh_caplen)) {
 				print_nd_ns(buf + bh->bh_hdrlen);
 				process_nd_ns(buf + bh->bh_hdrlen);
@@ -621,14 +621,16 @@ void nd_reflect_loop(void)
 	}
 }
 
-char *in6_ntoa(struct in6_addr *in6_addr)
+char *
+in6_ntoa(struct in6_addr *in6_addr)
 {
 	if (!inet_ntop(AF_INET6, in6_addr, ntop_buf, sizeof(ntop_buf)))
 		log_warning("inet_ntop error: %s", strerror(errno));
 	return ntop_buf;
 }
 
-void vlog(int pri, const char *fmt, va_list ap)
+void
+vlog(int pri, const char *fmt, va_list ap)
 {
 	if (daemon_mode) {
 		vsyslog(pri, fmt, ap);
@@ -639,7 +641,8 @@ void vlog(int pri, const char *fmt, va_list ap)
 	}
 }
 
-void log_warning(const char *fmt, ...)
+void
+log_warning(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -648,7 +651,8 @@ void log_warning(const char *fmt, ...)
 	va_end(ap);
 }
 
-void log_info(const char *fmt, ...)
+void
+log_info(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -657,7 +661,8 @@ void log_info(const char *fmt, ...)
 	va_end(ap);
 }
 
-void log_debug(const char *fmt, ...)
+void
+log_debug(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -668,7 +673,8 @@ void log_debug(const char *fmt, ...)
 	}
 }
 
-void logit(int pri, const char *fmt, ...)
+void
+logit(int pri, const char *fmt, ...)
 {
 	va_list ap;
 
