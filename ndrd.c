@@ -475,7 +475,7 @@ process_nd_ns(u_char *p)
 	// log NA packet info
 
 	(void)strncpy(buf, in6_ntoa(ip6_src), sizeof(buf));
-	log_info("send NA with dest address %s, target address %s", buf,
+	log_debug("send NA with dest address %s, target address %s", buf,
 	    in6_ntoa(nd_ns_target));
 
 	if (monitor_mode) {
