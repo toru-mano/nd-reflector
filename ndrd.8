@@ -1,0 +1,154 @@
+.Dd $Mdocdate: October 30 2021 $
+.Dt NDRD 8
+.Os
+.Sh NAME
+.Nm ndrd
+.Nd Neighbor Discovery (ND) reflector daemon
+.Sh SYNOPSIS
+.Nm ndrd
+.Op Fl dmv
+.Ar wan_if lan_if
+.Sh DESCRIPTION
+.Nm
+listens for a Neighbor Solicitation (NS) packet destined to its subnet and
+immediately replies to it by sending a neighbor advertisement (NA) packet. So
+.Nm
+works like ND proxies (RFC 4389) but does not check the host presence. Thus it
+is a reflector.
+.Pp
+.Nm
+aims to provide global IPv6 reachability to hosts in an IPv4/v6
+dual-stack home network without NAT66 translation.
+.Pp
+Proper proxies check the presence of the host corresponding to the NS target
+address by sending an NS packet from the LAN interface. If they receive a reply
+NA packet, then they proxy it to the original sender.
+.Pp
+On the other hand, when
+.Nm
+receives an NS packet arriving WAN interface, it consults the routing table
+checking the destination interface of the NS target address. If the destination
+interface matches the LAN interface, then
+.Nm
+sends an NA packet to the sender of the NS packet.
+.Pp
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl d
+Do not daemonize. That is,
+.Nm
+runs in the foreground and logs to
+.Em stderr .
+.It Fl m
+Run in monitor mode. That is,
+.Nm
+receives NS packets but does not send NA packets.
+.It Fl v
+Produce more verbose output.
+.El
+.Sh EXAMPLES
+In the following,
+.Ar em0
+is the WAN interface and
+.Ar em1
+is the LAN interface.
+.Pp
+WAN interface configuration
+.Pa /etc/hostname.em0 :
+.Bd -literal -offset indent
+inet6 eui64
+!route add -inet6 default fe80::1%em0
+.Ed
+.Pp
+LAN interface configuration
+.Pa /etc/hostname.em1 :
+.Bd -literal -offset indent
+inet6 2001:db8::1 64
+.Ed
+.Pp
+Router advertisement daemon (rad) configuration
+.Pa /etc/rad.conf :
+.Bd -literal -offset indent
+interface em1
+.Ed
+.Pp
+Finally, configure and run
+.Nm
+with routing.
+.Bd -literal -offset indent
+# sysctl net.inet6.ip6.forwarding=1
+# rcctl enable ndrd
+# rcctl set ndrd flags em0 em1
+# rcctl start ndrd
+.Ed
+.Pp
+Add the following
+.Xr pf 4
+rule to suppress
+.Dq cannot forward
+message (see
+.Sx CAVEATS
+).
+.Bd -literal -offset indent
+block in on em0 inet6 proto ipv6-icmp from fe80::/10 \\
+    to 2000::/3 icmp6-type neighbrsol
+.Ed
+.Sh SEE ALSO
+.Xr bpf 4 ,
+.Xr hostname.if 5 ,
+.Xr pf.conf 5
+.Sh STANDARDS
+.Rs
+.%A T. Narten
+.%A E. Nordmark
+.%A W. Simpson
+.%A H. Soliman
+.%D September 2007
+.%R RFC 4861
+.%T Neighbor Discovery for IP version 6 (IPv6)
+.Re
+.Sh AUTHORS
+.An Toru Mano
+.Sh CAVEATS
+Your
+.Cm dmesg
+or
+.Pa /var/log/messages
+will be filled up the following messages:
+.Bd -literal -offset indent
+cannot forward src fe80::1, dst 2001:db8::1, nxt 58, rcvif 1, outif 2
+.Ed
+.Pp
+This is because ISP routers periodically send NS packets to unicast ethernet
+addresses (not multicast ethernet addresses) to update NDP tables. When
+.Nm
+receives these packets, it replies with NA packets as usual. At the same time,
+OpenBSD kernel tries to forward these NS packets to a LAN interface. These NS
+packets have link-local source addresses and global unicast destination
+addresses. In this case, the scope of the source address is smaller than that of
+the destination. So, the kernel refuses to forward these packets and logs
+messages like above.
+.Pp
+Also, the kernel sends ICMP6 destination unreachable error with code 2 (beyond
+the scope of source address) to ISP routers to tell the error. ISP routers
+possibly confuse by receiving NA replies and unreachable errors at the same
+time.
+.Pp
+One way to avoid those issues is to block such packets by adding the following
+rule to
+.Xr pf.conf 5 :
+.Bd -literal -offset indent
+block in on em0 inet6 proto ipv6-icmp from fe80::/10 \\
+    to 2000::/3 icmp6-type neighbrsol
+.Ed
+.Pp
+Note this configuration does not affect
+.Nm
+behavior because
+.Nm
+uses
+.Xr bpf 4
+to receive packets, and
+.Xr bpf 4
+works before
+.Xr pf 4 .
