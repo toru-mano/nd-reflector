@@ -18,8 +18,15 @@ works like ND proxies (RFC 4389) but does not check the host presence.
 Thus it is a reflector.
 .Pp
 .Nm
-aims to provide global IPv6 reachability to hosts in an IPv4/v6
-dual-stack home network without NAT66 translation.
+aims to provide global IPv6 reachability to hosts in an IPv4/v6 dual-stack
+network without NAT66 translation as in the following diagram:
+.Bd -literal -offset indent
+           +------------+                 +---------+      +------+
+           |            | IPv4        Wan |         | Lan  |      |
+Internet --+ ISP Router +-----------------+ OpenBSD +------+ Host |
+           |            | IPv6            |         |      |      |
+           +------------+  (RA with /64)  +---------+      +------+
+.Ed
 .Pp
 Proper proxies check the presence of the host corresponding to the NS target
 address by sending an NS packet from the LAN interface.
