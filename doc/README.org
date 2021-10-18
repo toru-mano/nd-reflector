@@ -1,12 +1,4 @@
 #+TITLE: =ndrd=: Neighbor Discovery (ND) reflector for OpenBSD
-#+EXPORT: org-org-export-to-org
-
-# Export mandoc to text and include it.
-#+begin_src sh :exports none
-mandoc ../ndrd.8 | col -b | expand > ndrd.8.txt
-#+end_src
-
-#+RESULTS:
 
 #+INCLUDE: "ndrd.8.txt" src txt
 
@@ -29,5 +21,7 @@ mandoc ../ndrd.8 | col -b | expand > ndrd.8.txt
 
 - FreeBSD kernel module for ND proxy
   - https://github.com/AlexandreFenyo/ndproxy
-- Linux and FreeBSD deamons for ND proxy
+- Linux and FreeBSD daemons for ND proxy
   - https://github.com/DanielAdolfsson/ndppd
+- Linux daemon for ND proxy
+  - https://github.com/setaou/ndp-proxy

@@ -1,8 +1,6 @@
-# Created 2021-10-18 Mon 22:20
+# Created 2021-10-18 Mon 22:37
 #+TITLE: =ndrd=: Neighbor Discovery (ND) reflector for OpenBSD
 #+AUTHOR: toru
-#+export: org-org-export-to-org
-
 #+begin_src txt
   NDRD(8)                     System Manager's Manual                    NDRD(8)
 
@@ -136,5 +134,7 @@
 
 - FreeBSD kernel module for ND proxy
   - https://github.com/AlexandreFenyo/ndproxy
-- Linux and FreeBSD deamons for ND proxy
+- Linux and FreeBSD daemons for ND proxy
   - https://github.com/DanielAdolfsson/ndppd
+- Linux daemon ND proxy
+  - https://github.com/setaou/ndp-proxy
