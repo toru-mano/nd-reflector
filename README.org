@@ -1,8 +1,12 @@
 * A Neighbor Discovery (ND) reflector for OpenBSD
 
-An ND reflector works like ND proxies (RFC 4389) but does not check the host presence. It listens for a Neighbor Solicitation (NS) packet destined to its subnet and immediately replies to it by sending a neighbor advertisement (NA) packet. Thus it is a reflector.
+An ND reflector works like ND proxies (RFC 4389) but does not check the host
+presence. It listens for a Neighbor Solicitation (NS) packet destined to its
+subnet and immediately replies to it by sending a neighbor advertisement (NA)
+packet. Thus it is a reflector.
 
-The ND reflector aims to provide global IPv6 reachability to hosts in an IPv4/v6 dual-stack home network without NAT66 translation as in the following diagram.
+The ND reflector aims to provide global IPv6 reachability to hosts in an IPv4/v6
+dual-stack home network without NAT66 translation as in the following diagram.
 
 #+begin_src picture
                +-------------+                       +------------+            +--------+
@@ -12,10 +16,122 @@ The ND reflector aims to provide global IPv6 reachability to hosts in an IPv4/v6
                +-------------+  (RA with /64)        +------------+            +--------+
 #+end_src
 
-Proper proxies check the presence of the host corresponding to the NS target address by sending an NS packet from the LAN interface. If they receive a reply NA packet, then they proxy it to the original sender.
+Proper proxies check the presence of the host corresponding to the NS target
+address by sending an NS packet from the LAN interface. If they receive a reply
+NA packet, then they proxy it to the original sender.
 
-On the other hand, when a reflector receives an NS packet arriving WAN interface, it consults the routing table checking the destination interface of the NS target address. If the destination interface matches the LAN interface, then the reflector sends an NA packet to the sender of the NS packet.
+On the other hand, when a reflector receives an NS packet arriving WAN
+interface, it consults the routing table checking the destination interface of
+the NS target address. If the destination interface matches the LAN interface,
+then the reflector sends an NA packet to the sender of the NS packet.
 
+#+begin_src
+NDRD(8)			    System Manager's Manual		       NDRD(8)
+
+NAME
+     ndrd  Neighbor Discovery (ND) reflector daemon
+
+SYNOPSIS
+     ndrd [-dmv] wan_if lan_if
+
+DESCRIPTION
+     ndrd listens for a Neighbor Solicitation (NS) packet destined to its
+     subnet and immediately replies to it by sending a neighbor advertisement
+     (NA) packet.  So ndrd works like ND proxies (RFC 4389) but does not check
+     the host presence.	 Thus it is a reflector.
+
+     ndrd aims to provide global IPv6 reachability to hosts in an IPv4/v6
+     dual-stack home network without NAT66 translation.
+
+     Proper proxies check the presence of the host corresponding to the NS
+     target address by sending an NS packet from the LAN interface.  If they
+     receive a reply NA packet, then they proxy it to the original sender.
+
+     On the other hand, when ndrd receives an NS packet arriving WAN
+     interface, it consults the routing table checking the destination
+     interface of the NS target address.  If the destination interface matches
+     the LAN interface, then ndrd sends an NA packet to the sender of the NS
+     packet.
+
+     The options are as follows:
+
+     -d	     Do not daemonize.	That is, ndrd runs in the foreground and logs
+	     to stderr.
+
+     -m	     Run in monitor mode.  That is, ndrd receives NS packets but does
+	     not send NA packets.
+
+     -v	     Produce more verbose output.
+
+EXAMPLES
+     In the following, em0 is the WAN interface and em1 is the LAN interface.
+
+     WAN interface configuration /etc/hostname.em0:
+
+	   inet6 eui64
+	   !route add -inet6 default fe80::1%em0
+
+     LAN interface configuration /etc/hostname.em1:
+
+	   inet6 2001:db8::1 64
+
+     Router advertisement daemon (rad) configuration /etc/rad.conf:
+
+	   interface em1
+
+     Finally, configure and run ndrd with routing.
+
+	   # sysctl net.inet6.ip6.forwarding=1
+	   # rcctl enable ndrd
+	   # rcctl set ndrd flags em0 em1
+	   # rcctl start ndrd
+
+     Add the following pf(4) rule to suppress cannot forward message (see
+     CAVEATS ).
+
+	   block in on em0 inet6 proto ipv6-icmp from fe80::/10 \
+	       to 2000::/3 icmp6-type neighbrsol
+
+SEE ALSO
+     bpf(4), hostname.if(5), pf.conf(5)
+
+STANDARDS
+     T. Narten, E. Nordmark, W. Simpson, and H. Soliman, Neighbor Discovery
+     for IP version 6 (IPv6), RFC 4861, September 2007.
+
+AUTHORS
+     Toru Mano
+
+CAVEATS
+     Your dmesg or /var/log/messages will be filled up the following messages:
+
+	   cannot forward src fe80::1, dst 2001:db8::1, nxt 58, rcvif 1, outif 2
+
+     This is because ISP routers periodically send NS packets to unicast
+     ethernet addresses (not multicast ethernet addresses) to update NDP
+     tables.  When ndrd receives these packets, it replies with NA packets as
+     usual.  At the same time, OpenBSD kernel tries to forward these NS
+     packets to a LAN interface.  These NS packets have link-local source
+     addresses and global unicast destination addresses.  In this case, the
+     scope of the source address is smaller than that of the destination.  So,
+     the kernel refuses to forward these packets and logs messages like above.
+
+     Also, the kernel sends ICMP6 destination unreachable error with code 2
+     (beyond the scope of source address) to ISP routers to tell the error.
+     ISP routers possibly confuse by receiving NA replies and unreachable
+     errors at the same time.
+
+     One way to avoid those issues is to block such packets by adding the
+     following rule to pf.conf(5):
+
+	   block in on em0 inet6 proto ipv6-icmp from fe80::/10 \
+	       to 2000::/3 icmp6-type neighbrsol
+
+     Note this configuration does not affect ndrd behavior because ndrd uses
+     bpf(4) to receive packets, and bpf(4) works before pf(4).
+
+OpenBSD 6.9		       October 30, 2021			   OpenBSD 6.9
+#+end_src
 
 ** Build and install
 
@@ -26,79 +142,6 @@ On the other hand, when a reflector receives an NS packet arriving WAN interface
   make
   doas make install
 #+end_src
-
-** Start daemon
-
-#+begin_src sh
-  doas rcctl enable ndrd
-  doas rcctl set ndrd flags em1 em2
-  rcctl get ndrd
-  doas rcctl start ndrd
-#+end_src
-
-In the above example, =em1= is the WAN interface and =em2= is the LAN interface.
-
-*** debug mode
-
-By specifying the option =-dv=, =ndrd= will run in the foreground (that is, not daemonize) and log to =stderr=.
-
-#+begin_src sh
-  doas ndprd -dv em1 em2
-#+end_src
-
-If the option =-m= specified, =ndrd= receives NS packets but not send NA packets.
-
-** Example configuration
-
-WAN interface configuration =/etc/hostname.em0=.
-
-#+begin_src conf
-  inet6 eui64
-  !route add -inet6 default fe80::1%em0
-#+end_src
-
-LAN interface configuration =/etc/hostname.em1=. The IPv6 subnet must match the advertised address prefix in the RA packet from the ISP router.
-
-#+begin_src conf
-  inet6 2001:db8::1 64
-#+end_src
-
-Router advertisement daemon (rad) configuration =/etc/rad.conf=
-
-#+begin_src conf
-  interface em1
-#+end_src
-
-ND reflector configuration and routing.
-
-#+begin_src sh
-  doas rcctl set ndrd flags em0 em1
-  doas sysctl net.inet6.ip6.forwarding=1
-#+end_src
-
-PF configuration to suppress cannot forward message (see [[Caveats]]).
-
-#+begin_src conf
-block in on em0 inet6 proto ipv6-icmp from fe80::/10 to 2000::/3 icmp6-type neighbrsol
-#+end_src
-
-** Caveats
-
-ISP routers periodically send NS packets to unicast ethernet addresses (not multicast ethernet addresses) to update NDP tables. When a reflector receives these packets, it replies with NA packets as usual. At the same time, OpenBSD kernel tries to forward these NS packets to a LAN interface. These NS packets have link-local source addresses and global unicast destination addresses. In this case, the scope of the source address is smaller than that of the destination. So, the kernel refuses to forward these packets and logs messages like below.
-
-#+begin_src sh
-  cannot forward src fe80::1, dst 2001:db8::1, nxt 58, rcvif 1, outif 2
-#+end_src
-
- Your =dmesg= or =/var/log/messages= will be filled up the above messages. Also, the kernel sends ICMP6 destination unreachable error with code 2 (beyond the scope of source address) to ISP routers to tell the error. ISP routers possibly confuse by receiving NA replies and unreachable errors at the same time.
-
-One way to avoid those issues is to block such packets by adding the following rule to =pf.conf=.
-
-#+begin_src conf
-block in on em0 inet6 proto ipv6-icmp from fe80::/10 to 2000::/3 icmp6-type neighbrsol
-#+end_src
-
-Note this configuration does not affect ND reflector behavior because ND reflector uses bpf to receive packets, and bpf works before pf.
 
 ** Testing environment
 

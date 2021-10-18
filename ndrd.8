@@ -11,36 +11,39 @@
 .Sh DESCRIPTION
 .Nm
 listens for a Neighbor Solicitation (NS) packet destined to its subnet and
-immediately replies to it by sending a neighbor advertisement (NA) packet. So
+immediately replies to it by sending a neighbor advertisement (NA) packet.
+So
 .Nm
-works like ND proxies (RFC 4389) but does not check the host presence. Thus it
-is a reflector.
+works like ND proxies (RFC 4389) but does not check the host presence.
+Thus it is a reflector.
 .Pp
 .Nm
 aims to provide global IPv6 reachability to hosts in an IPv4/v6
 dual-stack home network without NAT66 translation.
 .Pp
 Proper proxies check the presence of the host corresponding to the NS target
-address by sending an NS packet from the LAN interface. If they receive a reply
-NA packet, then they proxy it to the original sender.
+address by sending an NS packet from the LAN interface.
+If they receive a reply NA packet, then they proxy it to the original sender.
 .Pp
 On the other hand, when
 .Nm
 receives an NS packet arriving WAN interface, it consults the routing table
-checking the destination interface of the NS target address. If the destination
-interface matches the LAN interface, then
+checking the destination interface of the NS target address.
+If the destination interface matches the LAN interface, then
 .Nm
 sends an NA packet to the sender of the NS packet.
 .Pp
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl d
-Do not daemonize. That is,
+Do not daemonize.
+That is,
 .Nm
 runs in the foreground and logs to
 .Em stderr .
 .It Fl m
-Run in monitor mode. That is,
+Run in monitor mode.
+That is,
 .Nm
 receives NS packets but does not send NA packets.
 .It Fl v
@@ -120,19 +123,23 @@ cannot forward src fe80::1, dst 2001:db8::1, nxt 58, rcvif 1, outif 2
 .Ed
 .Pp
 This is because ISP routers periodically send NS packets to unicast ethernet
-addresses (not multicast ethernet addresses) to update NDP tables. When
+addresses (not multicast ethernet addresses) to update NDP tables.
+When
 .Nm
-receives these packets, it replies with NA packets as usual. At the same time,
-OpenBSD kernel tries to forward these NS packets to a LAN interface. These NS
-packets have link-local source addresses and global unicast destination
-addresses. In this case, the scope of the source address is smaller than that of
-the destination. So, the kernel refuses to forward these packets and logs
-messages like above.
+receives these packets, it replies with NA packets as usual.
+At the same time,
+.Ox
+kernel tries to forward these NS packets to a LAN interface.
+These NS packets have link-local source addresses and global unicast destination
+addresses.
+In this case, the scope of the source address is smaller than that of the
+destination.
+So, the kernel refuses to forward these packets and logs messages like above.
 .Pp
 Also, the kernel sends ICMP6 destination unreachable error with code 2 (beyond
-the scope of source address) to ISP routers to tell the error. ISP routers
-possibly confuse by receiving NA replies and unreachable errors at the same
-time.
+the scope of source address) to ISP routers to tell the error.
+ISP routers possibly confuse by receiving NA replies and unreachable errors at
+the same time.
 .Pp
 One way to avoid those issues is to block such packets by adding the following
 rule to
