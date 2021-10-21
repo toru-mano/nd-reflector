@@ -67,6 +67,7 @@ void		 send_nd_na(struct ether_addr *, struct in6_addr *,
 		    struct in6_addr *);
 void		 nd_reflect_loop(void);
 char		*in6_ntoa(struct in6_addr *);
+void		 log_err(const char *, ...);
 void		 log_warning(const char *, ...);
 void		 log_info(const char *, ...);
 void		 log_debug(const char *, ...);
@@ -555,7 +556,8 @@ send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 	}
 
 	if ((n = write(wan.bpf_fd, &na, sizeof(na))) == -1) {
-		error("write");
+		log_err("Failed to write bpf %zd bytes: %s", sizeof(na),
+		    strerror(errno));
 	}
 
 	log_debug("Write %zd of %zd characters.", n, sizeof(na));
@@ -581,12 +583,11 @@ nd_reflect_loop(void)
 
 		nfds = poll(&pfd, 1, timeout);
 		if (nfds == -1) {
-			if (errno == EINTR)
-				continue;
-			error("poll");
+			log_err("Failed to poll: %s", strerror(errno));
+			continue;
 		}
 		if (nfds == 0) {
-			log_debug("poll returns zero.");
+			log_debug("poll timeout");
 			continue;
 		}
 
@@ -598,8 +599,10 @@ nd_reflect_loop(void)
 			log_debug("EINTR while read.");
 			goto again;
 		}
-		if (length == -1)
-			error("read");
+		if (length == -1) {
+			log_err("Failed to read: %s", strerror(errno));
+			continue;
+		}
 
 		buf = wan.bpf_buf;
 		buf_limit = wan.bpf_buf + length;
@@ -639,6 +642,16 @@ vlog(int pri, const char *fmt, va_list ap)
 		fprintf(stderr, "\n");
 		fflush(stderr);
 	}
+}
+
+void
+log_err(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vlog(LOG_ERR, fmt, ap);
+	va_end(ap);
 }
 
 void
