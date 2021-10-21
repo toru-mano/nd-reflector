@@ -67,7 +67,6 @@ void		 send_nd_na(struct ether_addr *, struct in6_addr *,
 		    struct in6_addr *);
 void		 nd_reflect_loop(void);
 char		*in6_ntoa(struct in6_addr *);
-void		 log_err(const char *, ...);
 void		 log_warning(const char *, ...);
 void		 log_info(const char *, ...);
 void		 log_debug(const char *, ...);
@@ -556,7 +555,7 @@ send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 	}
 
 	if ((n = write(wan.bpf_fd, &na, sizeof(na))) == -1) {
-		log_err("Failed to write bpf %zd bytes: %s", sizeof(na),
+		log_warning("Failed to write bpf %zd bytes: %s", sizeof(na),
 		    strerror(errno));
 	}
 
@@ -583,7 +582,7 @@ nd_reflect_loop(void)
 
 		nfds = poll(&pfd, 1, timeout);
 		if (nfds == -1) {
-			log_err("Failed to poll: %s", strerror(errno));
+			log_warning("Failed to poll: %s", strerror(errno));
 			continue;
 		}
 		if (nfds == 0) {
@@ -600,7 +599,7 @@ nd_reflect_loop(void)
 			goto again;
 		}
 		if (length == -1) {
-			log_err("Failed to read: %s", strerror(errno));
+			log_warning("Failed to read: %s", strerror(errno));
 			continue;
 		}
 
@@ -642,16 +641,6 @@ vlog(int pri, const char *fmt, va_list ap)
 		fprintf(stderr, "\n");
 		fflush(stderr);
 	}
-}
-
-void
-log_err(const char *fmt, ...)
-{
-	va_list ap;
-
-	va_start(ap, fmt);
-	vlog(LOG_ERR, fmt, ap);
-	va_end(ap);
 }
 
 void
