@@ -329,7 +329,7 @@ init_wan_if_addr(struct wan_if *wan)
 		errorx("Interface %s has no IPv6 link local address",
 		    wan->if_name);
 
-	log_info("complete wan_if address information: {Eth = %s, IP = %s}",
+	log_info("Got wan_if addresses: Eth=%s, IP=%s",
 	    ether_ntoa(&wan->eth_addr), in6_ntoa(&wan->sin6.sin6_addr));
 }
 
@@ -555,7 +555,8 @@ send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 	}
 
 	if ((n = write(wan.bpf_fd, &na, sizeof(na))) == -1) {
-		error("write");
+		log_warning("Failed to write bpf %zd bytes: %s", sizeof(na),
+		    strerror(errno));
 	}
 
 	log_debug("Write %zd of %zd characters.", n, sizeof(na));
@@ -581,12 +582,11 @@ nd_reflect_loop(void)
 
 		nfds = poll(&pfd, 1, timeout);
 		if (nfds == -1) {
-			if (errno == EINTR)
-				continue;
-			error("poll");
+			log_warning("Failed to poll: %s", strerror(errno));
+			continue;
 		}
 		if (nfds == 0) {
-			log_debug("poll returns zero.");
+			log_debug("poll timeout");
 			continue;
 		}
 
@@ -598,8 +598,10 @@ nd_reflect_loop(void)
 			log_debug("EINTR while read.");
 			goto again;
 		}
-		if (length == -1)
-			error("read");
+		if (length == -1) {
+			log_warning("Failed to read: %s", strerror(errno));
+			continue;
+		}
 
 		buf = wan.bpf_buf;
 		buf_limit = wan.bpf_buf + length;
