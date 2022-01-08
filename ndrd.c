@@ -410,7 +410,7 @@ print_nd_ns(u_char *p)
 
 /*
  * Read ND NS field parameters and send NA if required.
- * NA will be send on if all of the following conditions are met:
+ * NA will be send only if all of the following conditions are met:
  * - Ethernet source address matches NS source link-layer address
  * - IPv6 source address is not unspecified (duplicate address detection)
  * - NS target address is global unicast address
