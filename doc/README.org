@@ -5,11 +5,9 @@
 * Build and install
 
 #+begin_src sh
-  mkdir build
-  cd build
-  cmake -DCMAKE_BUILD_TYPE=Release ..
   make
   doas make install
+  doas install -c -o root -g wheel -m 555  script/ndrd /etc/rd.d/ndrd
 #+end_src
 
 * Testing environment
