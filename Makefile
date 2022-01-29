@@ -3,7 +3,7 @@ MANDIR?=	/usr/local/man/man
 PROG=		ndrd
 SRCS=		ndrd.c lookup_rib.c
 
-MAN=		ndrd.8
+MAN=		doc/ndrd.8
 
 #DEBUG=	-g -DDEBUG=3 -O0
 
