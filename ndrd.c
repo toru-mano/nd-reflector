@@ -554,12 +554,14 @@ send_nd_na(struct ether_addr *dst_ll_addr, struct in6_addr *dest_addr,
 		na.na_hdr.nd_na_hdr.icmp6_cksum = ~sum;
 	}
 
-	if ((n = write(wan.bpf_fd, &na, sizeof(na))) == -1) {
-		log_warning("Failed to write bpf %zd bytes: %s", sizeof(na),
-		    strerror(errno));
-	}
+	for (int i = 0; i < 3; i++)
+		if ((n = write(wan.bpf_fd, &na, sizeof(na))) != -1) {
+			log_debug("Write %zd of %zd characters.", n, sizeof(na));
+			return;
+		}
 
-	log_debug("Write %zd of %zd characters.", n, sizeof(na));
+	log_warning("Failed to write bpf %zd bytes: %s", sizeof(na),
+	    strerror(errno));
 }
 
 /*
