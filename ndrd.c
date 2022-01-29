@@ -58,7 +58,7 @@ struct raw_nd_na {
 
 __dead void	 usage(void);
 void		 terminate(int);
-void		 init_wan_if_addr(struct wan_if *);
+void		 init_wan_if_addr(void);
 int		 open_bpf(char *);
 int		 check_nd_ns_format(u_char *, size_t);
 void		 print_nd_ns(u_char *);
@@ -140,7 +140,7 @@ main(int argc, char *argv[])
 	log_info("started with wan_if: %s, lan_if: %s", wan.if_name,
 	    lan.if_name);
 
-	init_wan_if_addr(&wan);
+	init_wan_if_addr();
 	wan.bpf_fd = open_bpf(wan.if_name);
 
 	if (daemon_mode)
@@ -257,7 +257,7 @@ open_bpf(char *if_name)
  * Initialize WAN interface's Ethernet address and IPv6 link local address.
  */
 void
-init_wan_if_addr(struct wan_if *wan)
+init_wan_if_addr(void)
 {
 	struct ifaddrs		 *ifap, *ifa;
 	struct sockaddr_dl	 *sdl;
@@ -266,14 +266,14 @@ init_wan_if_addr(struct wan_if *wan)
 	int			 found = 0, found_dl = 0, found_in6 = 0;
 
 	log_debug("%s: initialize wan_if address information: %s.", __func__,
-	    wan->if_name);
+	    wan.if_name);
 
 	if (getifaddrs(&ifap) != 0)
 		error("getifaddrs");
 
 	for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 
-		if (strcmp(ifa->ifa_name, wan->if_name)) {
+		if (strcmp(ifa->ifa_name, wan.if_name)) {
 			continue;
 		}
 
@@ -284,10 +284,10 @@ init_wan_if_addr(struct wan_if *wan)
 		case AF_LINK:
 			sdl = (struct sockaddr_dl *)ifa->ifa_addr;
 			if (sdl->sdl_type == IFT_ETHER && sdl->sdl_alen == 6) {
-				wan->eth_addr =
+				wan.eth_addr =
 				    *(struct ether_addr *)LLADDR(sdl);
 				log_debug("%s: %s [Ethernet]: %s", __func__,
-				    ifa->ifa_name, ether_ntoa(&wan->eth_addr));
+				    ifa->ifa_name, ether_ntoa(&wan.eth_addr));
 				found_dl = 1;
 			}
 			break;
@@ -301,7 +301,7 @@ init_wan_if_addr(struct wan_if *wan)
 				    *(u_int16_t *)&sin6->sin6_addr.s6_addr[2]);
 				sin6->sin6_addr.s6_addr[2] =
 				    sin6->sin6_addr.s6_addr[3] = 0;
-				wan->sin6 = *sin6;
+				wan.sin6 = *sin6;
 				found_in6 = 1;
 			}
 
@@ -320,17 +320,17 @@ init_wan_if_addr(struct wan_if *wan)
 	freeifaddrs(ifap);
 
 	if (!found)
-		errorx("Interface not found %s", wan->if_name);
+		errorx("Interface not found %s", wan.if_name);
 
 	if (!found_dl)
-		errorx("Interface %s has no Ether address", wan->if_name);
+		errorx("Interface %s has no Ether address", wan.if_name);
 
 	if (!found_in6)
 		errorx("Interface %s has no IPv6 link local address",
-		    wan->if_name);
+		    wan.if_name);
 
 	log_info("Got wan_if addresses: Eth=%s, IP=%s",
-	    ether_ntoa(&wan->eth_addr), in6_ntoa(&wan->sin6.sin6_addr));
+	    ether_ntoa(&wan.eth_addr), in6_ntoa(&wan.sin6.sin6_addr));
 }
 
 int
@@ -631,7 +631,7 @@ in6_ntoa(struct in6_addr *in6_addr)
 	return ntop_buf;
 }
 
-void
+static void
 vlog(int pri, const char *fmt, va_list ap)
 {
 	if (daemon_mode) {
@@ -675,7 +675,7 @@ log_debug(const char *fmt, ...)
 	}
 }
 
-void
+static void
 logit(int pri, const char *fmt, ...)
 {
 	va_list ap;
