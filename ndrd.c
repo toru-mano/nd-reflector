@@ -426,7 +426,7 @@ process_nd_ns(u_char *p)
 
 	// do sanity check
 	// ethernet source address == nd_opt source link-layer address
-	if (strncmp(ns->eth_hdr.ether_shost, (caddr_t)&ns->opt_lladr,
+	if (memcmp(ns->eth_hdr.ether_shost, &ns->opt_lladr,
 	    ETHER_ADDR_LEN) != 0) {
 		log_debug("%s: Ethernet source address does not match NS "
 		    "source link-layer address.", __func__);
