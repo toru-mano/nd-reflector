@@ -133,8 +133,8 @@ main(int argc, char *argv[])
 	if (unveil(NULL, NULL) == -1)
 		error("unveil");
 
-	strncpy(wan.if_name, argv[0], sizeof(wan.if_name));
-	strncpy(lan.if_name, argv[1], sizeof(lan.if_name));
+	strlcpy(wan.if_name, argv[0], sizeof(wan.if_name));
+	strlcpy(lan.if_name, argv[1], sizeof(lan.if_name));
 
 	log_info("started with wan_if: %s, lan_if: %s", wan.if_name,
 	    lan.if_name);
@@ -205,7 +205,7 @@ open_bpf(char *if_name)
 		error("ioctl(BIOCIMMEDIATE)");
 
 	/* Associate a hardware interface to BPF descriptor. */
-	strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
+	strlcpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
 	if (ioctl(fd, BIOCSETIF, (caddr_t)&ifr) == -1)
 		error("ioctl(BIOCSETIF)");
 	log_debug("Attach BPF descriptor to %s", if_name);
@@ -473,7 +473,7 @@ process_nd_ns(u_char *p)
 
 	// log NA packet info
 
-	(void)strncpy(buf, in6_ntoa(ip6_src), sizeof(buf));
+	strlcpy(buf, in6_ntoa(ip6_src), sizeof(buf));
 	log_debug("send NA with dest address %s, target address %s", buf,
 	    in6_ntoa(nd_ns_target));
 
