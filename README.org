@@ -1,4 +1,4 @@
-# Created 2022-01-29 Sat 15:40
+# Created 2022-08-18 Thu 13:45
 #+TITLE: =ndrd=: Neighbor Discovery (ND) reflector for OpenBSD
 #+AUTHOR: toru
 #+begin_src txt
@@ -112,7 +112,7 @@
        Note this configuration does not affect ndrd behavior because ndrd uses
        bpf(4) to receive packets, and bpf(4) works before pf(4).
 
-  OpenBSD 7.0                    October 30, 2021                    OpenBSD 7.0
+  OpenBSD 7.1                    October 30, 2021                    OpenBSD 7.1
 #+end_src
 
 * Build and install
@@ -120,13 +120,12 @@
 #+begin_src sh
   make
   doas make install
-  doas install -c -o root -g wheel -m 555  script/ndrd /etc/rd.d/ndrd
 #+end_src
 
 * Testing environment
 
-- OpenBSD 6.9 amd64
 - OpenBSD 7.0 amd64
+- OpenBSD 7.1 amd64
 
 * Similar projects
 

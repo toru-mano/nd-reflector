@@ -7,13 +7,12 @@
 #+begin_src sh
   make
   doas make install
-  doas install -c -o root -g wheel -m 555  script/ndrd /etc/rd.d/ndrd
 #+end_src
 
 * Testing environment
 
-- OpenBSD 6.9 amd64
 - OpenBSD 7.0 amd64
+- OpenBSD 7.1 amd64
 
 * Similar projects
 
