@@ -82,7 +82,6 @@ int			 monitor_mode = 0;
 int			 verbose_mode = 0;
 
 volatile sig_atomic_t	 quit = 0;
-static char		 ntop_buf[INET6_ADDRSTRLEN];
 
 __dead void
 usage(void)
@@ -628,9 +627,14 @@ nd_reflect_loop(void)
 char *
 in6_ntoa(struct in6_addr *in6_addr)
 {
-	if (!inet_ntop(AF_INET6, in6_addr, ntop_buf, sizeof(ntop_buf)))
+	static char	 buf[INET6_ADDRSTRLEN];
+
+	if (inet_ntop(AF_INET6, in6_addr, buf, sizeof(buf)) == NULL) {
 		log_warning("inet_ntop error: %s", strerror(errno));
-	return ntop_buf;
+		strlcpy(buf, "<invalid address>", sizeof(buf));
+	}
+
+	return buf;
 }
 
 static void
