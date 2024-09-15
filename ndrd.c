@@ -136,11 +136,13 @@ main(int argc, char *argv[])
 		errorx("need root privileges");
 
 	/* Check for assigned daemon user */
-	if (getpwnam(NDRD_USER) == NULL)
+	if ((pw = getpwnam(NDRD_USER)) == NULL)
 		errorx("unknown user %s", NDRD_USER);
 
 	if (unveil("/dev/bpf", "rw") == -1)
-		error("unveil");
+		error("unveil /dev/bpf");
+	if (unveil(pw->pw_dir, "r") == -1)
+		error("unveil %s", pw->pw_dir);
 	if (unveil(NULL, NULL) == -1)
 		error("unveil");
 
@@ -159,11 +161,8 @@ main(int argc, char *argv[])
 
 	lookup_rib_init();
 
-	if ((pw = getpwnam(NDRD_USER)) == NULL)
-		error("getpwnam");
-
 	if (chroot(pw->pw_dir) == -1)
-		error("chroot");
+		error("chroot %s", pw->pw_dir);
 
 	if (chdir("/") == -1)
 		error("chdir(\"/\")");
