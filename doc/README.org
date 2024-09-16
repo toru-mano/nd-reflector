@@ -11,8 +11,7 @@
 
 * Testing environment
 
-- OpenBSD 7.0 amd64
-- OpenBSD 7.1 amd64
+- OpenBSD amd64 7.0 or later
 
 * Similar projects
 

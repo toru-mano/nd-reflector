@@ -2,7 +2,7 @@
 
 all: install
 
-install: ../README.org ../ndrd.8
+install: ../README.org
 
 clean:
 	rm README.org.org ndrd.8.txt
@@ -15,6 +15,3 @@ ndrd.8.txt: ndrd.8
 
 ../README.org: README.org.org
 	install -m 644 README.org.org ../README.org
-
-../ndrd.8: ndrd.8
-	install -m 644 ndrd.8 ../ndrd.8
