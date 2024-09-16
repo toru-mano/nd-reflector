@@ -1,4 +1,4 @@
-# Created 2024-09-16 Mon 19:38
+# Created 2024-09-16 Mon 19:48
 #+title: =ndrd=: Neighbor Discovery (ND) reflector for OpenBSD
 #+author: toru
 #+begin_src txt
@@ -16,14 +16,15 @@
        (NA) packet.  So ndrd works like ND proxies (RFC 4389) but does not check
        the host presence.  Thus it is a reflector.
 
-       ndrd aims to provide global IPv6 reachability to hosts in an IPv4/v6
-       dual-stack network without NAT66 translation as in the following diagram:
+       ndrd aims to provide global IPv6 reachability to hosts behind an in an
+       IPv6 (RA with /64) router without NAT66 translation, as in the following
+       diagram:
 
                         +------------+                 +---------+      +------+
-                        |            | IPv4        Wan |         | Lan  |      |
+                        |            | IPv6        Wan |         | Lan  |      |
              Internet --+ ISP Router +-----------------+ OpenBSD +------+ Host |
-                        |            | IPv6            |         |      |      |
-                        +------------+  (RA with /64)  +---------+      +------+
+                        |            | RA with /64     |         |      |      |
+                        +------------+                 +---------+      +------+
 
        Proper proxies check the presence of the host corresponding to the NS
        target address by sending an NS packet from the LAN interface.  If they
@@ -124,8 +125,7 @@
 
 * Testing environment
 
-- OpenBSD 7.0 amd64
-- OpenBSD 7.1 amd64
+- OpenBSD amd64 7.0 or later
 
 * Similar projects
 
