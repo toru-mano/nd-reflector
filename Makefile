@@ -15,6 +15,8 @@ clean:
 	rm ndrd
 
 install:
+	groupinfo -e _ndrd || groupadd _ndrd
+	userinfo -e _ndrd || useradd -g _ndrd -c 'ND Reflector Daemon' -d /var/empty -s /sbin/nologin _ndrd
 	install -o root -g wheel -m 755 ndrd ${PREFIX}/sbin/ndrd
 	install -o root -g wheel -m 555 script/ndrd ${DESTDIR}/etc/rc.d/ndrd
 	install -o root -g wheel -m 555 doc/ndrd.8 ${PREFIX}/man/man8/ndrd.8

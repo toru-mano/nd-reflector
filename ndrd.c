@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <pwd.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -26,6 +27,8 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
+
+#define NDRD_USER	"_ndrd"
 
 struct wan_if {
 	char				 if_name[IFNAMSIZ];
@@ -99,7 +102,7 @@ terminate(__attribute__((unused)) int sig)
 int
 main(int argc, char *argv[])
 {
-	extern int	 optind;
+	struct passwd	*pw;
 	int		 ch;
 
 	openlog(getprogname(), LOG_PID, LOG_DAEMON);
@@ -128,8 +131,18 @@ main(int argc, char *argv[])
 	if (argc != 2)
 		usage();
 
+	/* Check for root privileges */
+	if (getuid())
+		errorx("need root privileges");
+
+	/* Check for assigned daemon user */
+	if ((pw = getpwnam(NDRD_USER)) == NULL)
+		errorx("unknown user %s", NDRD_USER);
+
 	if (unveil("/dev/bpf", "rw") == -1)
-		error("unveil");
+		error("unveil /dev/bpf");
+	if (unveil(pw->pw_dir, "r") == -1)
+		error("unveil %s", pw->pw_dir);
 	if (unveil(NULL, NULL) == -1)
 		error("unveil");
 
@@ -147,6 +160,17 @@ main(int argc, char *argv[])
 			error("daemon");
 
 	lookup_rib_init();
+
+	if (chroot(pw->pw_dir) == -1)
+		error("chroot %s", pw->pw_dir);
+
+	if (chdir("/") == -1)
+		error("chdir(\"/\")");
+
+	if (setgroups(1, &pw->pw_gid) ||
+		setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) ||
+		setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid))
+		error("can't drop privileges");
 
 	if (pledge("stdio", NULL) == -1)
 		error("pledge");

@@ -1,6 +1,6 @@
-# Created 2022-08-18 Thu 13:45
-#+TITLE: =ndrd=: Neighbor Discovery (ND) reflector for OpenBSD
-#+AUTHOR: toru
+# Created 2024-09-16 Mon 19:48
+#+title: =ndrd=: Neighbor Discovery (ND) reflector for OpenBSD
+#+author: toru
 #+begin_src txt
   NDRD(8)                     System Manager's Manual                    NDRD(8)
 
@@ -16,14 +16,15 @@
        (NA) packet.  So ndrd works like ND proxies (RFC 4389) but does not check
        the host presence.  Thus it is a reflector.
 
-       ndrd aims to provide global IPv6 reachability to hosts in an IPv4/v6
-       dual-stack network without NAT66 translation as in the following diagram:
+       ndrd aims to provide global IPv6 reachability to hosts behind an in an
+       IPv6 (RA with /64) router without NAT66 translation, as in the following
+       diagram:
 
-  		      +------------+                 +---------+      +------+
-  		      |            | IPv4        Wan |         | Lan  |      |
-  	   Internet --+ ISP Router +-----------------+ OpenBSD +------+ Host |
-  		      |            | IPv6            |         |      |      |
-  		      +------------+  (RA with /64)  +---------+      +------+
+                        +------------+                 +---------+      +------+
+                        |            | IPv6        Wan |         | Lan  |      |
+             Internet --+ ISP Router +-----------------+ OpenBSD +------+ Host |
+                        |            | RA with /64     |         |      |      |
+                        +------------+                 +---------+      +------+
 
        Proper proxies check the presence of the host corresponding to the NS
        target address by sending an NS packet from the LAN interface.  If they
@@ -38,10 +39,10 @@
        The options are as follows:
 
        -d      Do not daemonize.  That is, ndrd runs in the foreground and logs
-  	     to stderr.
+               to stderr.
 
        -m      Run in monitor mode.  That is, ndrd receives NS packets but does
-  	     not send NA packets.
+               not send NA packets.
 
        -v      Produce more verbose output.
 
@@ -50,29 +51,29 @@
 
        WAN interface configuration /etc/hostname.em0:
 
-  	   inet6 eui64
-  	   !route add -inet6 default fe80::1%em0
+             inet6 eui64
+             !route add -inet6 default fe80::1%em0
 
        LAN interface configuration /etc/hostname.em1:
 
-  	   inet6 2001:db8::1 64
+             inet6 2001:db8::1 64
 
        Router advertisement daemon (rad) configuration /etc/rad.conf:
 
-  	   interface em1
+             interface em1
 
        Finally, configure and run ndrd with routing.
 
-  	   # sysctl net.inet6.ip6.forwarding=1
-  	   # rcctl enable ndrd
-  	   # rcctl set ndrd flags em0 em1
-  	   # rcctl start ndrd
+             # sysctl net.inet6.ip6.forwarding=1
+             # rcctl enable ndrd
+             # rcctl set ndrd flags em0 em1
+             # rcctl start ndrd
 
        Add the following pf(4) rule to suppress cannot forward message (see
        CAVEATS ).
 
-  	   block in on em0 inet6 proto ipv6-icmp from fe80::/10 \
-  	       to 2000::/3 icmp6-type neighbrsol
+             block in on em0 inet6 proto ipv6-icmp from fe80::/10 \
+                 to 2000::/3 icmp6-type neighbrsol
 
   SEE ALSO
        bpf(4), hostname.if(5), pf.conf(5)
@@ -87,7 +88,7 @@
   CAVEATS
        Your dmesg or /var/log/messages will be filled up the following messages:
 
-  	   cannot forward src fe80::1, dst 2001:db8::1, nxt 58, rcvif 1, outif 2
+             cannot forward src fe80::1, dst 2001:db8::1, nxt 58, rcvif 1, outif 2
 
        This is because ISP routers periodically send NS packets to unicast
        ethernet addresses (not multicast ethernet addresses) to update NDP
@@ -106,13 +107,13 @@
        One way to avoid those issues is to block such packets by adding the
        following rule to pf.conf(5):
 
-  	   block in on em0 inet6 proto ipv6-icmp from fe80::/10 \
-  	       to 2000::/3 icmp6-type neighbrsol
+             block in on em0 inet6 proto ipv6-icmp from fe80::/10 \
+                 to 2000::/3 icmp6-type neighbrsol
 
        Note this configuration does not affect ndrd behavior because ndrd uses
        bpf(4) to receive packets, and bpf(4) works before pf(4).
 
-  OpenBSD 7.1                    October 30, 2021                    OpenBSD 7.1
+  OpenBSD 7.5                    October 30, 2021                    OpenBSD 7.5
 #+end_src
 
 * Build and install
@@ -124,8 +125,7 @@
 
 * Testing environment
 
-- OpenBSD 7.0 amd64
-- OpenBSD 7.1 amd64
+- OpenBSD amd64 7.0 or later
 
 * Similar projects
 
